@@ -1,0 +1,13 @@
+# Source photo library (converted assets live in public/)
+pic/
+# Local-only media archive created by npm run media:slim
+media-local/
+# Build / deps
+node_modules/
+.next/
+.git/
+*.tsbuildinfo
+.DS_Store
+.env
+.env.local
+.env*.local

@@ -1,0 +1,92 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+  --joob-cream: #fff7ef;
+  --joob-coral: #f08a3c;
+  --joob-peach: #ffe0c2;
+  --joob-mint: #b8e6cf;
+  --joob-cocoa: #3d2c29;
+  --joob-orange: #f08a3c;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  @apply bg-joob-cream text-joob-cocoa antialiased;
+  min-height: 100vh;
+  background-image:
+    radial-gradient(ellipse 70% 40% at 0% 0%, rgba(240, 138, 60, 0.16), transparent 55%),
+    radial-gradient(ellipse 50% 35% at 100% 5%, rgba(184, 230, 207, 0.2), transparent 50%),
+    radial-gradient(ellipse 40% 30% at 50% 100%, rgba(255, 224, 194, 0.55), transparent 55%);
+  background-attachment: fixed;
+}
+
+::selection {
+  background: rgba(240, 138, 60, 0.3);
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}
+
+/* Cat-themed hero wash — ginger orange */
+.hero-grid {
+  background-image:
+    radial-gradient(ellipse 70% 55% at 15% -5%, rgba(240, 138, 60, 0.18), transparent),
+    radial-gradient(ellipse 55% 45% at 92% 8%, rgba(184, 230, 207, 0.2), transparent),
+    radial-gradient(ellipse 40% 30% at 60% 80%, rgba(255, 234, 167, 0.28), transparent),
+    linear-gradient(180deg, #fffdfb 0%, #fff7ef 55%, #ffe0c2 100%);
+}
+
+.card-glow:hover {
+  box-shadow: 0 10px 36px rgba(240, 138, 60, 0.2);
+}
+
+/* Soft paw-print texture */
+.paw-bg {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='80' viewBox='0 0 80 80'%3E%3Cg fill='%23f08a3c' fill-opacity='0.07'%3E%3Ccircle cx='28' cy='28' r='6'/%3E%3Ccircle cx='44' cy='24' r='5'/%3E%3Ccircle cx='52' cy='36' r='5'/%3E%3Ccircle cx='24' cy='40' r='5'/%3E%3Cellipse cx='38' cy='48' rx='9' ry='8'/%3E%3C/g%3E%3C/svg%3E");
+}
+
+.joob-card {
+  @apply rounded-3xl border border-joob-coral/15 bg-white/90 shadow-card backdrop-blur-sm;
+}
+
+.joob-btn-primary {
+  @apply inline-flex items-center justify-center gap-2 rounded-2xl bg-joob-coral px-5 py-3 text-sm font-bold text-white shadow-cat transition hover:bg-joob-orangeDeep;
+}
+
+.joob-btn-secondary {
+  @apply inline-flex items-center justify-center gap-2 rounded-2xl bg-joob-cocoa px-5 py-3 text-sm font-bold text-white transition hover:bg-joob-cocoaSoft;
+}
+
+.joob-btn-ghost {
+  @apply inline-flex items-center justify-center gap-2 rounded-2xl border-2 border-joob-coral/30 bg-white px-5 py-3 text-sm font-bold text-joob-cocoa transition hover:border-joob-coral/60 hover:bg-joob-sky;
+}
+
+/* Video tiles */
+.cat-video-tile {
+  @apply relative overflow-hidden rounded-2xl border-2 border-white bg-joob-cocoa shadow-cat;
+}
+
+.cat-video-tile video {
+  @apply h-full w-full object-cover;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(240, 138, 60, 0.4);
+  border-radius: 999px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
