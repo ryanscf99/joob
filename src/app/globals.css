@@ -14,16 +14,60 @@
 
 html {
   scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 body {
   @apply bg-joob-cream text-joob-cocoa antialiased;
   min-height: 100vh;
+  min-height: 100dvh;
   background-image:
     radial-gradient(ellipse 70% 40% at 0% 0%, rgba(240, 138, 60, 0.16), transparent 55%),
     radial-gradient(ellipse 50% 35% at 100% 5%, rgba(184, 230, 207, 0.2), transparent 50%),
     radial-gradient(ellipse 40% 30% at 50% 100%, rgba(255, 224, 194, 0.55), transparent 55%);
-  background-attachment: fixed;
+  /* fixed backgrounds jank on iOS — scroll on mobile */
+  background-attachment: scroll;
+}
+
+@media (min-width: 1024px) {
+  body {
+    background-attachment: fixed;
+  }
+}
+
+/* Standalone PWA (Home Screen app) — feel more native */
+.joob-app-shell {
+  -webkit-tap-highlight-color: rgba(240, 138, 60, 0.15);
+  -webkit-touch-callout: none;
+}
+
+@media (display-mode: standalone) {
+  .joob-app-shell {
+    /* subtle top safe area wash under status bar */
+    background-color: #fff7ef;
+  }
+}
+
+/* Comfortable touch targets */
+button,
+a,
+[role="button"] {
+  touch-action: manipulation;
+}
+
+input,
+select,
+textarea {
+  font-size: 16px; /* prevents iOS zoom-on-focus */
+}
+
+@media (min-width: 640px) {
+  input,
+  select,
+  textarea {
+    font-size: inherit;
+  }
 }
 
 ::selection {
@@ -59,15 +103,20 @@ body {
 }
 
 .joob-btn-primary {
-  @apply inline-flex items-center justify-center gap-2 rounded-2xl bg-joob-coral px-5 py-3 text-sm font-bold text-white shadow-cat transition hover:bg-joob-orangeDeep;
+  @apply inline-flex min-h-[48px] items-center justify-center gap-2 rounded-2xl bg-joob-coral px-5 py-3 text-sm font-bold text-white shadow-cat transition hover:bg-joob-orangeDeep active:scale-[0.98];
 }
 
 .joob-btn-secondary {
-  @apply inline-flex items-center justify-center gap-2 rounded-2xl bg-joob-cocoa px-5 py-3 text-sm font-bold text-white transition hover:bg-joob-cocoaSoft;
+  @apply inline-flex min-h-[48px] items-center justify-center gap-2 rounded-2xl bg-joob-cocoa px-5 py-3 text-sm font-bold text-white transition hover:bg-joob-cocoaSoft active:scale-[0.98];
 }
 
 .joob-btn-ghost {
-  @apply inline-flex items-center justify-center gap-2 rounded-2xl border-2 border-joob-coral/30 bg-white px-5 py-3 text-sm font-bold text-joob-cocoa transition hover:border-joob-coral/60 hover:bg-joob-sky;
+  @apply inline-flex min-h-[48px] items-center justify-center gap-2 rounded-2xl border-2 border-joob-coral/30 bg-white px-5 py-3 text-sm font-bold text-joob-cocoa transition hover:border-joob-coral/60 hover:bg-joob-sky active:scale-[0.98];
+}
+
+/* Page section helper — consistent mobile breathing room */
+.joob-page {
+  @apply mx-auto max-w-6xl px-4 py-8 sm:py-10;
 }
 
 /* Video tiles */

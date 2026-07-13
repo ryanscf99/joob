@@ -39,6 +39,7 @@ import {
   setOfficialWorkforceLookup,
   type EmployerWorkforce,
 } from "@/lib/employer-transparency";
+import { repairHelloJobsExternalUrl } from "@/lib/hellojobs";
 
 interface DsalStats {
   officialTotalVacancies: number | null;
@@ -51,15 +52,23 @@ interface JobscallStats {
   returned: number;
 }
 
+interface HelloJobsStats {
+  pagesFetched: number;
+  totalOnBoard: number | null;
+  returned: number;
+}
+
 interface AppContextValue {
   lang: Lang;
   setLang: (l: Lang) => void;
   tr: (key: DictKey) => string;
-  /** Merged: official DSAL + Jobscall + platform/seed local listings */
+  /** Merged public vacancies only: DSAL + Jobscall + Hello-Jobs (no demo/in-app seed) */
   jobs: JobPosting[];
+  /** Employer/demo local posts — not shown in public job browse */
   localJobs: JobPosting[];
   officialJobs: JobPosting[];
   jobscallJobs: JobPosting[];
+  hellojobsJobs: JobPosting[];
   /** Sector pay benchmarks (prefer DSAL sample median) */
   wageBenchmarks: Record<Sector, SectorWageBenchmark>;
   dsalLoading: boolean;
@@ -70,9 +79,14 @@ interface AppContextValue {
   jobscallError: string | null;
   jobscallStats: JobscallStats | null;
   jobscallFetchedAt: string | null;
+  hellojobsLoading: boolean;
+  hellojobsError: string | null;
+  hellojobsStats: HelloJobsStats | null;
+  hellojobsFetchedAt: string | null;
   refreshJobs: () => void;
   refreshOfficialJobs: (opts?: { force?: boolean }) => Promise<void>;
   refreshJobscallJobs: (opts?: { force?: boolean }) => Promise<void>;
+  refreshHelloJobs: (opts?: { force?: boolean }) => Promise<void>;
   addJob: (job: JobPosting) => void;
   youth: YouthProfile | null;
   setYouth: (p: YouthProfile) => void;
@@ -86,34 +100,46 @@ interface AppContextValue {
 
 const AppContext = createContext<AppContextValue | null>(null);
 
+const PUBLIC_SOURCES = new Set(["dsal", "jobscall", "hellojobs"]);
+
+function isPublicVacancy(j: JobPosting): boolean {
+  const src = j.source || "";
+  return PUBLIC_SOURCES.has(src);
+}
+
 function mergeJobs(
-  local: JobPosting[],
+  _local: JobPosting[],
   official: JobPosting[],
-  jobscall: JobPosting[]
+  jobscall: JobPosting[],
+  hellojobs: JobPosting[]
 ): JobPosting[] {
-  // Order: DSAL official → Jobscall.me → platform/seed
+  // Public boards only — hide seed / in-app platform demos
   const seen = new Set<string>();
   const ordered: JobPosting[] = [];
 
   for (const j of official) {
     if (seen.has(j.id)) continue;
     seen.add(j.id);
-    ordered.push(j);
+    ordered.push({ ...j, source: j.source || "dsal" });
   }
   for (const j of jobscall) {
     if (seen.has(j.id)) continue;
     seen.add(j.id);
     ordered.push({ ...j, source: j.source || "jobscall" });
   }
-  for (const j of local) {
+  for (const j of hellojobs) {
     if (seen.has(j.id)) continue;
     seen.add(j.id);
     ordered.push({
       ...j,
-      source: j.source || (j.id.startsWith("j") ? "seed" : "platform"),
+      source: j.source || "hellojobs",
+      // Repair legacy apply links missing /Job-Search/ (Hello-Jobs 404 page)
+      externalUrl:
+        repairHelloJobsExternalUrl(j.externalUrl) || j.externalUrl,
     });
   }
-  return ordered;
+  // Intentionally omit seed/platform localJobs from public catalog
+  return ordered.filter(isPublicVacancy);
 }
 
 export function AppProvider({ children }: { children: ReactNode }) {
@@ -121,6 +147,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [localJobs, setLocalJobs] = useState<JobPosting[]>(seedJobs);
   const [officialJobs, setOfficialJobs] = useState<JobPosting[]>([]);
   const [jobscallJobs, setJobscallJobs] = useState<JobPosting[]>([]);
+  const [hellojobsJobs, setHellojobsJobs] = useState<JobPosting[]>([]);
   const [youth, setYouthState] = useState<YouthProfile | null>(null);
   const [employer, setEmployerState] = useState<EmployerProfile | null>(null);
   const [applications, setApplications] = useState<Application[]>([]);
@@ -134,10 +161,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [jobscallError, setJobscallError] = useState<string | null>(null);
   const [jobscallStats, setJobscallStats] = useState<JobscallStats | null>(null);
   const [jobscallFetchedAt, setJobscallFetchedAt] = useState<string | null>(null);
+  const [hellojobsLoading, setHellojobsLoading] = useState(false);
+  const [hellojobsError, setHellojobsError] = useState<string | null>(null);
+  const [hellojobsStats, setHellojobsStats] = useState<HelloJobsStats | null>(
+    null
+  );
+  const [hellojobsFetchedAt, setHellojobsFetchedAt] = useState<string | null>(
+    null
+  );
 
   const jobs = useMemo(
-    () => mergeJobs(localJobs, officialJobs, jobscallJobs),
-    [localJobs, officialJobs, jobscallJobs]
+    () => mergeJobs(localJobs, officialJobs, jobscallJobs, hellojobsJobs),
+    [localJobs, officialJobs, jobscallJobs, hellojobsJobs]
   );
 
   /** Live DSAL-sample medians by sector; static fallback when n is thin */
@@ -221,7 +256,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     if (!force && typeof sessionStorage !== "undefined") {
       try {
-        const cached = sessionStorage.getItem("myeib_jobscall_jobs_v2");
+        const cached = sessionStorage.getItem("myeib_jobscall_jobs_v3");
         if (cached) {
           const parsed = JSON.parse(cached) as {
             at: number;
@@ -249,8 +284,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setJobscallLoading(true);
     try {
       const qs = new URLSearchParams({
-        pages: "10",
-        limit: "400",
+        pages: "50",
+        limit: "1000",
       });
       if (force) qs.set("force", "1");
 
@@ -267,7 +302,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setJobscallFetchedAt(at);
       try {
         sessionStorage.setItem(
-          "myeib_jobscall_jobs_v2",
+          "myeib_jobscall_jobs_v3",
           JSON.stringify({
             at: Date.now(),
             data: { jobs: jobsList, stats, fetchedAt: at },
@@ -282,6 +317,76 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setJobscallError(msg);
     } finally {
       setJobscallLoading(false);
+    }
+  }, []);
+
+  const refreshHelloJobs = useCallback(async (opts?: { force?: boolean }) => {
+    const force = opts?.force === true;
+    setHellojobsError(null);
+
+    if (!force && typeof sessionStorage !== "undefined") {
+      try {
+        const cached = sessionStorage.getItem("myeib_hellojobs_jobs_v2");
+        if (cached) {
+          const parsed = JSON.parse(cached) as {
+            at: number;
+            data: {
+              jobs: JobPosting[];
+              stats: HelloJobsStats | null;
+              fetchedAt: string;
+            };
+          };
+          if (
+            Date.now() - parsed.at < 15 * 60 * 1000 &&
+            parsed.data?.jobs?.length
+          ) {
+            setHellojobsJobs(parsed.data.jobs);
+            setHellojobsStats(parsed.data.stats);
+            setHellojobsFetchedAt(parsed.data.fetchedAt);
+            return;
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+
+    setHellojobsLoading(true);
+    try {
+      const qs = new URLSearchParams({
+        pages: "67",
+        limit: "1000",
+      });
+      if (force) qs.set("force", "1");
+
+      const res = await fetch(`/api/hellojobs/jobs?${qs.toString()}`);
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+      const jobsList = (data.jobs || []) as JobPosting[];
+      setHellojobsJobs(jobsList);
+      const stats = (data.stats || null) as HelloJobsStats | null;
+      setHellojobsStats(stats);
+      const at = data.fetchedAt || new Date().toISOString();
+      setHellojobsFetchedAt(at);
+      try {
+        sessionStorage.setItem(
+          "myeib_hellojobs_jobs_v2",
+          JSON.stringify({
+            at: Date.now(),
+            data: { jobs: jobsList, stats, fetchedAt: at },
+          })
+        );
+      } catch {
+        /* quota — large payload may not fit */
+      }
+    } catch (e) {
+      const msg =
+        e instanceof Error ? e.message : "Failed to load Hello-Jobs listings";
+      setHellojobsError(msg);
+    } finally {
+      setHellojobsLoading(false);
     }
   }, []);
 
@@ -313,7 +418,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           setDsalFetchedAt(parsed.data.fetchedAt);
         }
       }
-      const jcRaw = sessionStorage.getItem("myeib_jobscall_jobs_v2");
+      const jcRaw = sessionStorage.getItem("myeib_jobscall_jobs_v3");
       if (jcRaw) {
         const parsed = JSON.parse(jcRaw) as {
           at: number;
@@ -332,6 +437,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
           setJobscallFetchedAt(parsed.data.fetchedAt);
         }
       }
+      const hjRaw = sessionStorage.getItem("myeib_hellojobs_jobs_v2");
+      if (hjRaw) {
+        const parsed = JSON.parse(hjRaw) as {
+          at: number;
+          data: {
+            jobs: JobPosting[];
+            stats: HelloJobsStats | null;
+            fetchedAt: string;
+          };
+        };
+        if (
+          Date.now() - parsed.at < 15 * 60 * 1000 &&
+          parsed.data?.jobs?.length
+        ) {
+          setHellojobsJobs(parsed.data.jobs);
+          setHellojobsStats(parsed.data.stats);
+          setHellojobsFetchedAt(parsed.data.fetchedAt);
+        }
+      }
     } catch {
       /* private mode / quota */
     }
@@ -343,12 +467,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (!hydrated) return;
     // DSAL first (smaller) so first paint / jobs feel fast
     void refreshOfficialJobs();
-    // Jobscall is heavier (many pages) — defer so tunnels aren't flooded on open
-    const t = window.setTimeout(() => {
+    // Commercial boards are heavier — stagger so tunnels aren't flooded on open
+    const tJc = window.setTimeout(() => {
       void refreshJobscallJobs();
     }, 600);
-    return () => window.clearTimeout(t);
-  }, [hydrated, refreshOfficialJobs, refreshJobscallJobs]);
+    const tHj = window.setTimeout(() => {
+      void refreshHelloJobs();
+    }, 1400);
+    return () => {
+      window.clearTimeout(tJc);
+      window.clearTimeout(tHj);
+    };
+  }, [hydrated, refreshOfficialJobs, refreshJobscallJobs, refreshHelloJobs]);
 
   /** Stable company set for NRW — recompute only when listing companies change */
   const nrwCompanies = useMemo(() => {
@@ -385,8 +515,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     const companies = nrwCompanies;
     const fingerprint = companyFingerprint;
-    // v4: stricter A3 brand matching (invalidates stale wrong firm maps)
-    const cacheKey = "myeib_dsal_nrw_match_v4";
+    // v5: whole-word Latin match (invalidates A&P→Fisherman false maps)
+    const cacheKey = "myeib_dsal_nrw_match_v5";
     let cancelled = false;
 
     const applyMap = (map: Record<string, EmployerWorkforce>) => {
@@ -548,6 +678,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
         return false;
       }
+      if (job?.source === "hellojobs") {
+        showToast(
+          lang === "zh"
+            ? "此為 Hello-Jobs 職位：請於原網站申請"
+            : "Hello-Jobs listing: apply on the original job page"
+        );
+        if (job.externalUrl && typeof window !== "undefined") {
+          window.open(job.externalUrl, "_blank", "noopener,noreferrer");
+        }
+        return false;
+      }
       const app: Application = {
         id: `app-${Date.now()}`,
         jobId,
@@ -577,6 +718,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       localJobs,
       officialJobs,
       jobscallJobs,
+      hellojobsJobs,
       wageBenchmarks,
       dsalLoading,
       dsalError,
@@ -586,9 +728,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       jobscallError,
       jobscallStats,
       jobscallFetchedAt,
+      hellojobsLoading,
+      hellojobsError,
+      hellojobsStats,
+      hellojobsFetchedAt,
       refreshJobs,
       refreshOfficialJobs,
       refreshJobscallJobs,
+      refreshHelloJobs,
       addJob,
       youth,
       setYouth,
@@ -607,6 +754,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       localJobs,
       officialJobs,
       jobscallJobs,
+      hellojobsJobs,
       wageBenchmarks,
       dsalLoading,
       dsalError,
@@ -616,9 +764,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       jobscallError,
       jobscallStats,
       jobscallFetchedAt,
+      hellojobsLoading,
+      hellojobsError,
+      hellojobsStats,
+      hellojobsFetchedAt,
       refreshJobs,
       refreshOfficialJobs,
       refreshJobscallJobs,
+      refreshHelloJobs,
       addJob,
       youth,
       setYouth,
@@ -647,7 +800,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       {toast && (
         <div
           role="status"
-          className="fixed bottom-6 left-1/2 z-[100] -translate-x-1/2 rounded-full bg-macau-navy px-5 py-3 text-sm text-white shadow-soft"
+          className="fixed left-1/2 z-[100] w-[min(92vw,28rem)] -translate-x-1/2 rounded-2xl border border-white/10 bg-joob-cocoa/95 px-5 py-3.5 text-center text-sm font-semibold text-white shadow-cat backdrop-blur-md lg:bottom-6"
+          style={{
+            bottom: "calc(5rem + env(safe-area-inset-bottom, 0px))",
+          }}
         >
           {toast}
         </div>

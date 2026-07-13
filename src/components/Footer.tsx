@@ -11,8 +11,8 @@ export function Footer() {
 
   return (
     <footer className="mt-auto border-t border-joob-coral/15 bg-gradient-to-b from-joob-cocoa to-[#2a1f1c] text-white/85">
-      {/* Cat photo ribbon */}
-      <div className="flex h-16 overflow-hidden opacity-90">
+      {/* Cat photo ribbon — shorter on phones */}
+      <div className="flex h-12 sm:h-16 overflow-hidden opacity-90">
         {strip.map((src) => (
           // eslint-disable-next-line @next/next/no-img-element
           <img
@@ -25,7 +25,7 @@ export function Footer() {
         ))}
       </div>
 
-      <div className="mx-auto max-w-6xl px-4 py-10">
+      <div className="mx-auto max-w-6xl px-4 py-8 sm:py-10">
         <div className="flex flex-col gap-8 md:flex-row md:justify-between">
           <div>
             <div className="flex items-center gap-3">
@@ -52,24 +52,30 @@ export function Footer() {
               />
             </div>
           </div>
-          <div className="flex flex-wrap gap-4 text-sm">
-            <Link href="/jobs" className="hover:text-joob-pink transition">
+          <div className="flex flex-wrap gap-x-4 gap-y-3 text-sm">
+            <Link href="/jobs" className="min-h-[40px] inline-flex items-center hover:text-joob-pink transition">
               {tr("navJobs")}
             </Link>
-            <Link href="/dashboard" className="hover:text-joob-pink transition">
+            <Link href="/match" className="min-h-[40px] inline-flex items-center hover:text-joob-pink transition">
+              {tr("navMatch")}
+            </Link>
+            <Link href="/dashboard" className="min-h-[40px] inline-flex items-center hover:text-joob-pink transition">
               {tr("navDashboard")}
             </Link>
-            <Link href="/youth" className="hover:text-joob-pink transition">
+            <Link href="/youth" className="min-h-[40px] inline-flex items-center hover:text-joob-pink transition">
               {tr("navYouth")}
             </Link>
-            <Link href="/about" className="hover:text-joob-pink transition">
+            <Link href="/install" className="min-h-[40px] inline-flex items-center font-semibold text-joob-pink hover:text-white transition">
+              {lang === "zh" ? "iPhone App" : "iPhone App"}
+            </Link>
+            <Link href="/about" className="min-h-[40px] inline-flex items-center hover:text-joob-pink transition">
               {tr("navAbout")}
             </Link>
             <a
               href="https://data.gov.mo/"
               target="_blank"
               rel="noreferrer"
-              className="hover:text-joob-pink transition"
+              className="min-h-[40px] inline-flex items-center hover:text-joob-pink transition"
             >
               data.gov.mo ↗
             </a>
@@ -77,7 +83,7 @@ export function Footer() {
               href="https://www.dsal.gov.mo/"
               target="_blank"
               rel="noreferrer"
-              className="hover:text-joob-pink transition"
+              className="min-h-[40px] inline-flex items-center hover:text-joob-pink transition"
             >
               DSAL ↗
             </a>

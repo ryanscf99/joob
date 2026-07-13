@@ -417,7 +417,7 @@ export function CatTV({ lang = "en" }: { lang?: "en" | "zh" }) {
             setOpen(true);
             setMinimized(false);
           }}
-          className="fixed bottom-5 right-5 z-[90] flex items-center gap-2 rounded-full bg-joob-coral px-4 py-3 text-sm font-bold text-white shadow-cat transition hover:bg-joob-orangeDeep hover:scale-105"
+          className="fixed right-4 z-[90] flex min-h-[48px] items-center gap-2 rounded-full bg-joob-coral px-4 py-3 text-sm font-bold text-white shadow-cat transition hover:bg-joob-orangeDeep hover:scale-105 active:scale-95 max-lg:bottom-[calc(4.75rem+env(safe-area-inset-bottom,0px))] lg:bottom-5"
           aria-label="Open Cat TV"
         >
           <span className="relative flex h-8 w-8 overflow-hidden rounded-full border-2 border-white/80">
@@ -435,10 +435,10 @@ export function CatTV({ lang = "en" }: { lang?: "en" | "zh" }) {
       {open && (
         <div
           className={clsx(
-            "fixed z-[90] overflow-hidden rounded-3xl border-2 border-white bg-joob-cocoa shadow-soft",
+            "fixed right-4 z-[90] overflow-hidden rounded-3xl border-2 border-white bg-joob-cocoa shadow-soft max-lg:bottom-[calc(4.75rem+env(safe-area-inset-bottom,0px))] lg:bottom-5 lg:right-5",
             minimized
-              ? "bottom-5 right-5 h-14 w-48"
-              : "bottom-5 right-5 w-[min(360px,calc(100vw-1.5rem))]"
+              ? "h-14 w-48"
+              : "w-[min(360px,calc(100vw-2rem))]"
           )}
         >
           <div className="flex items-center justify-between gap-2 bg-gradient-to-r from-joob-orangeDeep to-joob-coral px-3 py-2">

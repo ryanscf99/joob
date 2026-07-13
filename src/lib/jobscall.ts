@@ -5,12 +5,12 @@ export const JOBSCALL_BASE = "https://www.jobscall.me";
 export const JOBSCALL_COLLECTION_JSON = `${JOBSCALL_BASE}/job?format=json`;
 
 const FETCH_TIMEOUT_MS = 15_000;
-/** 20 companies/page → 10 pages ≈ 200 employers */
-const DEFAULT_MAX_PAGES = 10;
-const MAX_ROLES_PER_COMPANY = 6;
+/** 20 companies/page → 50 pages ≈ 1000 employers (catalog is finite; stops early) */
+const DEFAULT_MAX_PAGES = 50;
+const MAX_ROLES_PER_COMPANY = 10;
 /** First pass: take this many roles per employer so large casinos don’t crowd out SMEs */
-const FAIR_ROLES_PER_COMPANY = 3;
-const DEFAULT_MAX_JOBS = 400;
+const FAIR_ROLES_PER_COMPANY = 4;
+const DEFAULT_MAX_JOBS = 1000;
 
 export interface JobscallCollectionItem {
   id: string;
@@ -130,8 +130,21 @@ function extractRolesFromBody(body?: string): string[] {
   return roles;
 }
 
+function decodeHtmlEntities(s: string): string {
+  return (s || "")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)));
+}
+
 function cleanCompanyName(title?: string): { en: string; zh: string } {
-  const t = (title || "Employer").replace(/\s+/g, " ").trim();
+  const t = decodeHtmlEntities(title || "Employer")
+    .replace(/\s+/g, " ")
+    .trim();
   // Strip common trailing recruitment slogans
   const cleaned = t
     .replace(/澳門招聘\s*$/u, "")

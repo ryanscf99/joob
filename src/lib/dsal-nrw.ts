@@ -89,7 +89,7 @@ const g = globalThis as unknown as {
 };
 
 /** Brand-match algorithm version — invalidate in-process caches on change */
-const NRW_MATCH_ALGO = 5;
+const NRW_MATCH_ALGO = 6;
 if (g.__myeibNrwMatchAlgo !== NRW_MATCH_ALGO) {
   g.__myeibNrwMatchAlgo = NRW_MATCH_ALGO;
   g.__myeibDsalNrwGroupCache = new Map();
@@ -136,7 +136,7 @@ const LEGAL_SUFFIX_RE =
  * (e.g. EHR人力資源管理 → 金達利人力資源管理).
  */
 const GENERIC_BIZ_RE =
-  /人力資源管理|人力資源顧問|人力資源服務|人力資源|物業管理|資訊科技|信息科技|商業服務|管理顧問|顧問服務|工程顧問|進出口|國際貿易|貿易|顧問|管理|服務|發展|投資|控股|國際|集團|hotel|hotels|restaurant|restaurants?|resources?|human|administration|administra[cç][aã]o|recurso|humano|compan(?:hia|y)|servi[cç]os?|consultadoria|consulting|management|services?/gi;
+  /人力資源管理|人力資源顧問|人力資源服務|人力資源|物業管理|資訊科技|信息科技|商業服務|管理顧問|顧問服務|工程顧問|進出口|國際貿易|貿易|顧問|管理|服務|發展|投資基金|投資|控股|國際|集團|hotel|hotels|restaurant|restaurants?|resources?|human|administration|administra[cç][aã]o|recurso|humano|compan(?:hia|y)|servi[cç]os?|consultadoria|consulting|management|services?|investment[oe]?s?|investimento|fund|fundo|international|internacional|holding|holdings/gi;
 
 const LATIN_MATCH_STOP = new Set([
   "and",
@@ -155,6 +155,7 @@ const LATIN_MATCH_STOP = new Set([
   "limitada",
   "lda",
   "international",
+  "internacional",
   "holdings",
   "holding",
   "human",
@@ -166,12 +167,35 @@ const LATIN_MATCH_STOP = new Set([
   "consulting",
   "comercio",
   "comercial",
+  // Generic finance / investment words — must not link A&P Fund ↔ Fisherman's Wharf Investimento
+  "investment",
+  "investments",
+  "investimento",
+  "investimentos",
+  "fund",
+  "funds",
+  "fundo",
+  "fundos",
+  "capital",
+  "finance",
+  "financial",
+  "asset",
+  "assets",
+  "global",
+  "world",
+  "asia",
+  "china",
+  "pacific",
+  "companhia",
+  "sociedade",
+  "grupo",
 ]);
 
 function normalizeName(s: string): string {
   return (s || "")
     .toLowerCase()
-    .replace(/&amp;/g, " ")
+    .replace(/&amp;/gi, " and ")
+    .replace(/&/g, " and ")
     .replace(/[（）()]/g, " ")
     .replace(LEGAL_SUFFIX_RE, " ")
     .replace(/[^\p{L}\p{N}\s]/gu, " ")
@@ -187,11 +211,31 @@ function brandCore(s: string): string {
     .trim();
 }
 
-/** Latin / alphanumeric brand tokens (e.g. EHR, CTM, MGM) */
-function latinBrandTokens(s: string): string[] {
-  return ((s || "").toLowerCase().match(/[a-z][a-z0-9]{1,}/g) || []).filter(
-    (t) => !LATIN_MATCH_STOP.has(t) && t.length >= 2
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Whole-token Latin match — prevents "investment" matching inside "investimento".
+ */
+function latinTokenInText(token: string, hay: string): boolean {
+  if (!token || !hay) return false;
+  const re = new RegExp(
+    `(?:^|[^a-z0-9])${escapeRegExp(token)}(?:[^a-z0-9]|$)`,
+    "i"
   );
+  return re.test(hay);
+}
+
+/** Latin / alphanumeric brand tokens (e.g. EHR, CTM, MGM, AP) */
+function latinBrandTokens(s: string): string[] {
+  const raw = (s || "")
+    .toLowerCase()
+    .replace(/&amp;/gi, " and ")
+    .replace(/&/g, " and ");
+  // Keep letter+digit tokens; also glue A&P style via "and" split later
+  const tokens = raw.match(/[a-z][a-z0-9]{1,}/g) || [];
+  return tokens.filter((t) => !LATIN_MATCH_STOP.has(t) && t.length >= 2);
 }
 
 /** Remaining Chinese brand runs after stripping generics */
@@ -540,10 +584,11 @@ export function lookupDsalNrwEntity(
     const eCore = brandCore(`${zh} ${pt}`);
     const eZhCore = zhBrandTokens(eCore).join("");
 
-    // Latin brand in the listing (EHR, CTM, …) must appear on the A3 row
+    // Latin brand tokens must match as *whole words* on the A3 row
+    // (fixes: "investment" falsely matching Portuguese "investimento")
     if (qLatin.length > 0) {
       const latinHits = qLatin.filter(
-        (t) => hay.includes(t) || eCore.includes(t)
+        (t) => latinTokenInText(t, hay) || latinTokenInText(t, eCore)
       );
       if (latinHits.length === 0) {
         // No Latin overlap — only continue if Chinese brand cores align strongly
@@ -553,22 +598,41 @@ export function lookupDsalNrwEntity(
         );
         if (!strongZh) continue;
       } else {
-        // All significant Latin tokens preferred; require primary token
         const primary = [...qLatin].sort((a, b) => b.length - a.length)[0];
-        if (primary && !hay.includes(primary) && !eCore.includes(primary)) {
-          // Partial Latin only — need supporting Chinese brand (≥3 chars)
+        const primaryOk =
+          primary &&
+          (latinTokenInText(primary, hay) || latinTokenInText(primary, eCore));
+        // Require the longest brand token (e.g. proper name), not only generic leftovers
+        if (!primaryOk) {
           const support = zhParts.find(
             (p) => p.length >= 3 && zh.includes(p)
           );
           if (!support) continue;
         }
+        // If query has 2+ distinctive Latin tokens, need ≥2 hits (or full set if only 2)
+        if (qLatin.length >= 2 && latinHits.length < Math.min(2, qLatin.length)) {
+          continue;
+        }
+        // Prefer entities that share a high fraction of query Latin tokens
+        const coverage = latinHits.length / qLatin.length;
+        if (coverage < 0.5 && !zhParts.some((p) => p.length >= 3 && zh.includes(p))) {
+          continue;
+        }
+        // Light size tie-break only among true brand hits (not the old N+1 headcount blowout)
+        const sizeTie =
+          coverage >= 0.99
+            ? Math.min(e.totalEmployees, 20_000) / 50_000
+            : Math.min(e.totalEmployees, 200) / 5_000;
         consider(
           e,
           1200 +
             latinHits.reduce((s, t) => s + t.length * 30, 0) +
-            e.totalEmployees / 2000
+            coverage * 200 +
+            sizeTie +
+            // Prefer non-shop main entities when query is not a shop name
+            (/（.*店）|\(.*店\)|分店|專門店/.test(zh) ? -250 : 0)
         );
-        if (bestScore >= 1500) break;
+        // Do not early-exit on medium scores — keep scanning for better brand fit
         continue;
       }
     }

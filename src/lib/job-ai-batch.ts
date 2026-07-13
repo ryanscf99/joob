@@ -16,6 +16,14 @@ import type {
 } from "./job-ai-types";
 import { createXaiClient, isXaiConfigured, XAI_MODEL } from "./xai";
 import { assessProfessionFit } from "./profession-fit";
+import {
+  applyLocalHireAndSalaryToMatchResults,
+  computeJobRankSignals,
+  finalizeMatchScore,
+  signalsForLlm,
+  type JobRankSignals,
+} from "./match-rank-signals";
+import { lookupEmployerWorkforce } from "./employer-transparency";
 
 export type { JobAiStrip, BatchRankResult } from "./job-ai-types";
 
@@ -118,7 +126,58 @@ function compactJob(
           confidence: workforce.confidence,
         }
       : null,
+    rankSignals: (() => {
+      const sig = computeJobRankSignals(
+        job,
+        youth ?? null,
+        benchmarks ?? null,
+        workforce
+      );
+      return signalsForLlm(sig);
+    })(),
   };
+}
+
+function reblendBatchStrips(
+  strips: JobAiStrip[],
+  ruleRanked: { job: JobPosting; score: number }[],
+  youth: YouthProfile,
+  cv: ReturnType<typeof cvFromYouth>,
+  workforceByJobId?: Record<string, EmployerWorkforce | null | undefined>,
+  benchmarks?: Record<string, SectorWageBenchmark> | null
+): JobAiStrip[] {
+  const signalMap = new Map<string, JobRankSignals>();
+  for (const r of ruleRanked) {
+    const wf =
+      workforceByJobId?.[r.job.id] ??
+      lookupEmployerWorkforce(
+        `${r.job.company} ${r.job.companyZh}`,
+        r.job.sector
+      );
+    signalMap.set(
+      r.job.id,
+      computeJobRankSignals(r.job, youth, benchmarks, wf)
+    );
+  }
+  const pool = [...signalMap.values()];
+  const byId = new Map(ruleRanked.map((r) => [r.job.id, r.job]));
+
+  return strips.map((s) => {
+    const job = byId.get(s.jobId);
+    const sig = signalMap.get(s.jobId);
+    if (!job || !sig) return s;
+    const fin = finalizeMatchScore(s.fitScore, job, sig, pool, youth, cv);
+    const blurb =
+      fin.reasonEn && sig.localHireLevel === "low"
+        ? `${s.blurb}`.includes("Local") || `${s.blurb}`.includes("本地")
+          ? s.blurb
+          : `${fin.reasonEn.slice(0, 80)}${s.blurb ? ` · ${s.blurb.slice(0, 70)}` : ""}`.slice(
+              0,
+              200
+            )
+        : s.blurb;
+    return { ...s, fitScore: fin.fitScore, blurb };
+  });
 }
 
 /** Heuristic one-pass ranking (no LLM). */
@@ -127,10 +186,15 @@ export function buildHeuristicBatchRank(
 ): BatchRankResult {
   const topN = Math.min(20, Math.max(3, input.topN ?? 12));
   const cv = cvFromYouth(input.youth);
-  const ruleRanked = matchJobsWithCv(input.youth, input.jobs, cv).slice(
-    0,
-    topN
-  );
+  const ruleRanked = applyLocalHireAndSalaryToMatchResults(
+    matchJobsWithCv(input.youth, input.jobs, cv),
+    input.youth,
+    input.benchmarks,
+    (job) =>
+      input.workforceByJobId?.[job.id] ??
+      lookupEmployerWorkforce(`${job.company} ${job.companyZh}`, job.sector),
+    cv
+  ).slice(0, topN);
 
   const strips: JobAiStrip[] = ruleRanked.map((r, i) => {
     const advice: JobAiAdvice = buildHeuristicAdvice({
@@ -140,23 +204,28 @@ export function buildHeuristicBatchRank(
       workforce: input.workforceByJobId?.[r.job.id] ?? null,
       benchmarks: input.benchmarks,
     });
+    // Prefer rank-adjusted score (local-hire caps) over raw advice fit
+    const fitScore = Math.min(advice.fitScore, r.score);
+    let verdict = advice.verdict;
+    if (fitScore < 50 && (verdict === "strong_fit" || verdict === "possible")) {
+      verdict = fitScore < 35 ? "weak_fit" : "possible";
+    }
     const blurb =
       input.lang === "zh"
-        ? `${advice.headline} — ${advice.summary.slice(0, 120)}${advice.summary.length > 120 ? "…" : ""}`
-        : `${advice.headline} — ${advice.summary.slice(0, 140)}${advice.summary.length > 140 ? "…" : ""}`;
+        ? `${r.reasonsZh[0] || advice.headline} — ${advice.summary.slice(0, 100)}${advice.summary.length > 100 ? "…" : ""}`
+        : `${r.reasons[0] || advice.headline} — ${advice.summary.slice(0, 120)}${advice.summary.length > 120 ? "…" : ""}`;
 
     return {
       jobId: r.job.id,
-      fitScore: advice.fitScore,
-      verdict: advice.verdict,
-      blurb,
+      fitScore,
+      verdict,
+      blurb: blurb.slice(0, 220),
       rank: i + 1,
       ruleMatchScore: r.score,
       provider: "heuristic" as const,
     };
   });
 
-  // Sort by AI fitScore (heuristic mirrors rule closely)
   strips.sort((a, b) => b.fitScore - a.fitScore);
   strips.forEach((s, i) => {
     s.rank = i + 1;
@@ -164,8 +233,8 @@ export function buildHeuristicBatchRank(
 
   const overview =
     input.lang === "zh"
-      ? `已用規則＋薪酬／人手訊號對前 ${strips.length} 個職位排序。設定 XAI_API_KEY 後可改用 Grok 一次重排並生成更短摘要。`
-      : `Ranked top ${strips.length} roles with rules + pay/workforce signals. Set XAI_API_KEY to re-rank in one Grok pass with tighter blurbs.`;
+      ? `已用規則排序前 ${strips.length} 個職位：本地招聘「低」者配對分上限約 48，不會以 100 分居首。設定 XAI_API_KEY 後可用 Grok 重排（仍套用同一護欄）。`
+      : `Ranked top ${strips.length} roles with rules: Low local-hiring ads are capped (~48) and cannot lead with a perfect score. Set XAI_API_KEY for Grok re-rank under the same guardrails.`;
 
   return {
     ranked: strips,
@@ -255,14 +324,21 @@ export async function generateBatchJobRank(
       messages: [
         {
           role: "system",
-          content: `You are jOOB Macau youth career coach. Rank a shortlist of job vacancies for ONE seeker in a single pass.
+          content: `You are jOOB Macau youth career coach. Rank a shortlist of PUBLIC job vacancies for ONE seeker in a single pass.
 ${langLine}
 PRIMARY criteria: (1) regulated professional credentials, (2) profession/skills domain.
 - If profession.credentialBlock is true or missingCredentials is non-empty, fitScore MUST be ≤ 20 and verdict not_recommended. Doctors, nurses, physiotherapists, psychologists, lawyers, CPAs, etc. cannot be matched by keywords alone without CV evidence of the licence/registration.
 - If profession.hardMismatch is true, fitScore MUST be ≤ 30 and verdict not_recommended or weak_fit.
 - A Statistics/Data PhD must NOT rank high for Tea Master, barista, waiter, cashier, or similar craft/service roles.
 - Rank roles that match seeker domains AND credentials first.
-Secondary: payDeviationPct, workforce mix, youth-friendly, ruleMatchScore.
+
+PRIORITY BOOSTS (among profession-safe roles — must change ranking order):
+1) LOCAL HIRING HARD CAPS:
+   - level "low" → fitScore ≤ maxFitScoreIfLow (48). Never 80–100.
+   - level "mixed" → fitScore ≤ maxFitScoreIfMixed (68).
+   - High/Fair local-hire must outrank Low when profession fit is comparable.
+2) EXPECTED SALARY: Prefer higher proposeTargetMonthlyMop; negative payDeviationPct lowers rank.
+Secondary: youth-friendly, ruleMatchScore.
 Use ONLY provided facts. Do not invent salaries or headcounts.
 Output ONLY valid JSON.`,
         },
@@ -271,22 +347,22 @@ Output ONLY valid JSON.`,
           content: `Seeker:
 ${JSON.stringify(seeker)}
 
-Jobs shortlist (with profession fit tags):
+Jobs shortlist (profession tags + rankSignals for local hiring & expected salary):
 ${JSON.stringify(compactJobs)}
 
 Return JSON:
 {
-  "overview": "2–3 sentences — emphasise profession fit across the shortlist",
+  "overview": "2–3 sentences — profession fit, then local hiring priority, then expected salary",
   "ranked": [
     {
       "jobId": "exact id from input",
       "fitScore": 0-100,
       "verdict": "strong_fit|possible|weak_fit|not_recommended",
-      "blurb": "max 160 chars — profession/skills reason first"
+      "blurb": "max 160 chars — profession first; mention local-hire or pay when decisive"
     }
   ]
 }
-Include EVERY jobId exactly once. Order ranked best → worst by profession fit, then other factors.`,
+Include EVERY jobId exactly once. Order best → worst: profession fit, then higher local hiring likelihood, then higher expected propose salary.`,
         },
       ],
     });
@@ -365,22 +441,30 @@ Include EVERY jobId exactly once. Order ranked best → worst by profession fit,
       });
     }
 
-    ranked.sort((a, b) => b.fitScore - a.fitScore);
-    ranked.forEach((s, i) => {
+    const blended = reblendBatchStrips(
+      ranked,
+      ruleRanked,
+      input.youth,
+      cv,
+      input.workforceByJobId,
+      input.benchmarks
+    );
+    blended.sort((a, b) => b.fitScore - a.fitScore);
+    blended.forEach((s, i) => {
       s.rank = i + 1;
     });
 
     return {
-      ranked,
+      ranked: blended,
       overview:
         String(parsed.overview || "").trim() ||
         (input.lang === "zh"
-          ? "已完成 AI 批次排序。"
-          : "AI batch ranking complete."),
+          ? "已完成 AI 批次排序（本地招聘與預期薪酬已納入）。"
+          : "AI batch ranking complete (local hiring + expected salary included)."),
       provider: "xai",
       model: completion.model || XAI_MODEL,
       generatedAt: new Date().toISOString(),
-      topN: ranked.length,
+      topN: blended.length,
     };
   } catch {
     return buildHeuristicBatchRank({ ...input, topN });

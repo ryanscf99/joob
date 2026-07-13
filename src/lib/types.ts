@@ -13,7 +13,7 @@ export type Sector =
   | "education"
   | "other";
 
-export type JobSource = "seed" | "platform" | "dsal" | "jobscall";
+export type JobSource = "seed" | "platform" | "dsal" | "jobscall" | "hellojobs";
 
 export interface JobPosting {
   id: string;

@@ -25,7 +25,7 @@ const SECTORS: Sector[] = [
 /** Keep list DOM small — 400+ cards was the main click lag */
 const PAGE_SIZE = 24;
 
-type SourceFilter = "all" | "dsal" | "jobscall" | "local";
+type SourceFilter = "all" | "dsal" | "jobscall" | "hellojobs";
 
 export default function JobsPage() {
   const {
@@ -42,8 +42,14 @@ export default function JobsPage() {
     jobscallError,
     jobscallStats,
     jobscallFetchedAt,
+    hellojobsJobs,
+    hellojobsLoading,
+    hellojobsError,
+    hellojobsStats,
+    hellojobsFetchedAt,
     refreshOfficialJobs,
     refreshJobscallJobs,
+    refreshHelloJobs,
   } = useApp();
   const [qInput, setQInput] = useState("");
   const [q, setQ] = useState("");
@@ -53,7 +59,7 @@ export default function JobsPage() {
   const [page, setPage] = useState(0);
   const [aiStrips, setAiStrips] = useState<Record<string, JobAiStrip>>({});
 
-  const loading = dsalLoading || jobscallLoading;
+  const loading = dsalLoading || jobscallLoading || hellojobsLoading;
 
   // Debounce search so each keystroke does not re-filter hundreds of jobs
   useEffect(() => {
@@ -74,13 +80,16 @@ export default function JobsPage() {
   const filtered = useMemo(() => {
     const query = q.toLowerCase().trim();
     return jobs.filter((j) => {
-      if (source === "dsal" && j.source !== "dsal") return false;
-      if (source === "jobscall" && j.source !== "jobscall") return false;
+      // Public boards only (seed/platform already excluded from merge)
       if (
-        source === "local" &&
-        (j.source === "dsal" || j.source === "jobscall")
+        j.source === "seed" ||
+        j.source === "platform" ||
+        (!j.source && !j.officialNo)
       )
         return false;
+      if (source === "dsal" && j.source !== "dsal") return false;
+      if (source === "jobscall" && j.source !== "jobscall") return false;
+      if (source === "hellojobs" && j.source !== "hellojobs") return false;
       if (lane && j.lane !== lane) return false;
       if (sector && j.sector !== sector) return false;
       if (!query) return true;
@@ -116,6 +125,7 @@ export default function JobsPage() {
   const refreshAll = () => {
     void refreshOfficialJobs({ force: true });
     void refreshJobscallJobs({ force: true });
+    void refreshHelloJobs({ force: true });
   };
 
   return (
@@ -133,8 +143,8 @@ export default function JobsPage() {
           </h1>
           <p className="mt-1 text-joob-cocoaSoft">
             {lang === "zh"
-              ? "官方勞工局空缺 + Jobscall.me + 平台職位——jOOB 貓小隊陪你一起挑。"
-              : "Official DSAL + Jobscall.me + in-app roles — browse with the jOOB cat crew."}
+              ? "僅顯示公開真實空缺：勞工局 + Jobscall.me + Hello-Jobs——jOOB 貓小隊陪你一起挑。"
+              : "Public real vacancies only: DSAL + Jobscall.me + Hello-Jobs — browse with the jOOB cat crew."}
           </p>
         </div>
       </div>
@@ -152,6 +162,11 @@ export default function JobsPage() {
               <span className="inline-flex items-center gap-1.5 text-macau-teal">
                 <ExternalLink className="h-4 w-4" />
                 {tr("sourceJobscall")}
+              </span>
+              <span className="text-macau-navy/30">·</span>
+              <span className="inline-flex items-center gap-1.5 text-amber-700">
+                <ExternalLink className="h-4 w-4" />
+                {tr("sourceHelloJobs")}
               </span>
             </div>
             <p className="mt-1 text-xs leading-relaxed text-macau-navy/55">
@@ -174,10 +189,18 @@ export default function JobsPage() {
                 {jobscallStats?.companies != null &&
                   ` (${jobscallStats.companies} ${lang === "zh" ? "僱主" : "employers"})`}
               </span>
-              {(dsalFetchedAt || jobscallFetchedAt) && (
+              <span>
+                {hellojobsJobs.length} {tr("hellojobsLoaded")}
+                {hellojobsStats?.totalOnBoard != null &&
+                  ` (${lang === "zh" ? "板上約" : "~"}${hellojobsStats.totalOnBoard.toLocaleString()}${lang === "zh" ? "" : " on board"})`}
+              </span>
+              {(dsalFetchedAt || jobscallFetchedAt || hellojobsFetchedAt) && (
                 <span className="text-macau-navy/40">
                   {new Date(
-                    dsalFetchedAt || jobscallFetchedAt || ""
+                    dsalFetchedAt ||
+                      jobscallFetchedAt ||
+                      hellojobsFetchedAt ||
+                      ""
                   ).toLocaleString()}
                 </span>
               )}
@@ -192,6 +215,12 @@ export default function JobsPage() {
               <p className="mt-1 inline-flex items-center gap-1 text-xs text-macau-red">
                 <AlertCircle className="h-3.5 w-3.5" />
                 {tr("jobscallLoadError")}: {jobscallError}
+              </p>
+            )}
+            {hellojobsError && (
+              <p className="mt-1 inline-flex items-center gap-1 text-xs text-macau-red">
+                <AlertCircle className="h-3.5 w-3.5" />
+                {tr("hellojobsLoadError")}: {hellojobsError}
               </p>
             )}
           </div>
@@ -228,7 +257,7 @@ export default function JobsPage() {
           <option value="all">{tr("sourceFilterAll")}</option>
           <option value="dsal">{tr("sourceFilterOfficial")}</option>
           <option value="jobscall">{tr("sourceFilterJobscall")}</option>
-          <option value="local">{tr("sourceFilterLocal")}</option>
+          <option value="hellojobs">{tr("sourceFilterHelloJobs")}</option>
         </select>
         <select
           value={lane}

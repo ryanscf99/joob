@@ -7,6 +7,7 @@ import {
   MapPin,
   Banknote,
   Clock,
+  CalendarDays,
   Languages as LangIcon,
   ShieldCheck,
   GraduationCap,
@@ -16,9 +17,12 @@ import {
 import { useApp } from "@/context/AppContext";
 import { laneLabel, sectorLabel } from "@/lib/i18n";
 import { formatPay } from "@/lib/matching";
+import { formatJobPostedAt } from "@/components/JobCard";
 import { PayBenchmarkPanel } from "@/components/PayBenchmark";
 import { EmployerTransparencyPanel } from "@/components/EmployerTransparency";
 import { JobAiAdvicePanel } from "@/components/JobAiAdvice";
+import { NrwIntentPanel } from "@/components/NrwIntentPanel";
+import { SalaryNegotiatePanel } from "@/components/SalaryNegotiatePanel";
 import { pickCat } from "@/lib/cat-gallery";
 
 export default function JobDetailPage() {
@@ -37,8 +41,15 @@ export default function JobDetailPage() {
     );
   }
 
-  const title = lang === "zh" ? job.titleZh : job.title;
-  const company = lang === "zh" ? job.companyZh : job.company;
+  const decode = (s: string) =>
+    (s || "")
+      .replace(/&amp;/gi, "&")
+      .replace(/&lt;/gi, "<")
+      .replace(/&gt;/gi, ">")
+      .replace(/&quot;/gi, '"')
+      .replace(/&#39;/g, "'");
+  const title = decode(lang === "zh" ? job.titleZh : job.title);
+  const company = decode(lang === "zh" ? job.companyZh : job.company);
   const desc = lang === "zh" ? job.descriptionZh : job.description;
   const reqs = lang === "zh" ? job.requirementsZh : job.requirements;
   const district = lang === "zh" ? job.districtZh : job.district;
@@ -82,6 +93,11 @@ export default function JobDetailPage() {
               <ExternalLink className="h-3.5 w-3.5" /> {tr("sourceJobscall")}
             </span>
           )}
+          {job.source === "hellojobs" && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-amber-600 px-3 py-1 text-xs font-semibold text-white">
+              <ExternalLink className="h-3.5 w-3.5" /> {tr("sourceHelloJobs")}
+            </span>
+          )}
           <span className="rounded-full bg-macau-sky px-3 py-1 text-xs font-semibold text-macau-teal">
             {laneLabel(lang, job.lane)}
           </span>
@@ -98,6 +114,16 @@ export default function JobDetailPage() {
         <p className="mt-1 text-lg text-macau-navy/60">{company}</p>
 
         <div className="mt-6 flex flex-wrap gap-4 text-sm text-macau-navy/65">
+          {formatJobPostedAt(job.postedAt, lang) && (
+            <span
+              className="inline-flex items-center gap-1.5 font-medium text-macau-navy/75"
+              title={job.postedAt}
+            >
+              <CalendarDays className="h-4 w-4 text-joob-coral/80" />
+              {lang === "zh" ? "發佈" : "Posted"}{" "}
+              {formatJobPostedAt(job.postedAt, lang)}
+            </span>
+          )}
           <span className="inline-flex items-center gap-1.5">
             <MapPin className="h-4 w-4" /> {district}
           </span>
@@ -114,6 +140,14 @@ export default function JobDetailPage() {
 
         <div className="mt-6">
           <PayBenchmarkPanel job={job} />
+        </div>
+
+        <div className="mt-6">
+          <SalaryNegotiatePanel job={job} />
+        </div>
+
+        <div className="mt-6">
+          <NrwIntentPanel job={job} />
         </div>
 
         <div className="mt-6">
@@ -172,12 +206,22 @@ export default function JobDetailPage() {
               : "This listing is from Jobscall.me (commercial board). Review full requirements and apply on the original employer page. Not an official DSAL vacancy."}
           </div>
         )}
+        {job.source === "hellojobs" && (
+          <div className="mt-6 rounded-2xl border border-amber-200 bg-amber-50/80 px-4 py-3 text-sm text-macau-navy/75">
+            {lang === "zh"
+              ? "此職位來自 Hello-Jobs.com 商業招聘平台。請於原職位頁查看完整要求並申請。非勞工局官方空缺。"
+              : "This listing is from Hello-Jobs.com (commercial board). Review full requirements and apply on the original job page. Not an official DSAL vacancy."}
+          </div>
+        )}
 
         <div className="mt-8 flex flex-wrap gap-3">
           <button
             type="button"
             disabled={
-              !!already && job.source !== "dsal" && job.source !== "jobscall"
+              !!already &&
+              job.source !== "dsal" &&
+              job.source !== "jobscall" &&
+              job.source !== "hellojobs"
             }
             onClick={() => applyToJob(job.id)}
             className="rounded-xl bg-macau-red px-6 py-3 text-sm font-semibold text-white disabled:opacity-40 hover:bg-macau-red/90 transition"
@@ -186,9 +230,11 @@ export default function JobDetailPage() {
               ? tr("applyOfficial")
               : job.source === "jobscall"
                 ? tr("applyJobscall")
-                : already
-                  ? tr("applied")
-                  : tr("apply")}
+                : job.source === "hellojobs"
+                  ? tr("applyHelloJobs")
+                  : already
+                    ? tr("applied")
+                    : tr("apply")}
           </button>
           {job.source === "dsal" && job.externalUrl && (
             <a
@@ -210,6 +256,17 @@ export default function JobDetailPage() {
             >
               <ExternalLink className="h-4 w-4" />
               Jobscall.me
+            </a>
+          )}
+          {job.source === "hellojobs" && job.externalUrl && (
+            <a
+              href={job.externalUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-2 rounded-xl bg-amber-600 px-6 py-3 text-sm font-semibold text-white hover:bg-amber-700 transition"
+            >
+              <ExternalLink className="h-4 w-4" />
+              Hello-Jobs
             </a>
           )}
         </div>

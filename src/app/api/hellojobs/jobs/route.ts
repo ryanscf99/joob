@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { fetchJobscallJobs, JOBSCALL_BASE } from "@/lib/jobscall";
+import { fetchHelloJobs, HELLOJOBS_BASE } from "@/lib/hellojobs";
 import type { JobPosting } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
-interface JobscallJobsPayload {
+interface HelloJobsPayload {
   ok: true;
   source: string;
   sourceUrl: string;
@@ -12,7 +12,8 @@ interface JobscallJobsPayload {
   fetchedAt: string;
   cached?: boolean;
   stats: {
-    companies: number;
+    pagesFetched: number;
+    totalOnBoard: number | null;
     returned: number;
   };
   jobs: JobPosting[];
@@ -20,41 +21,42 @@ interface JobscallJobsPayload {
 
 type CacheEntry = {
   expiresAt: number;
-  payload: JobscallJobsPayload;
+  payload: HelloJobsPayload;
 };
 
 const g = globalThis as unknown as {
-  __myeibJobscallCache?: Map<string, CacheEntry>;
-  __myeibJobscallInflight?: Map<string, Promise<JobscallJobsPayload>>;
+  __myeibHelloJobsCache?: Map<string, CacheEntry>;
+  __myeibHelloJobsInflight?: Map<string, Promise<HelloJobsPayload>>;
 };
 
-const CACHE_TTL_MS = 15 * 60 * 1000; // 15 min — commercial board; avoid re-crawl on every click
+const CACHE_TTL_MS = 15 * 60 * 1000; // 15 min
 
 function cacheMap() {
-  if (!g.__myeibJobscallCache) g.__myeibJobscallCache = new Map();
-  return g.__myeibJobscallCache;
+  if (!g.__myeibHelloJobsCache) g.__myeibHelloJobsCache = new Map();
+  return g.__myeibHelloJobsCache;
 }
 
 function inflightMap() {
-  if (!g.__myeibJobscallInflight) g.__myeibJobscallInflight = new Map();
-  return g.__myeibJobscallInflight;
+  if (!g.__myeibHelloJobsInflight) g.__myeibHelloJobsInflight = new Map();
+  return g.__myeibHelloJobsInflight;
 }
 
 async function buildPayload(
   maxPages: number,
   maxJobs: number
-): Promise<JobscallJobsPayload> {
-  const result = await fetchJobscallJobs({ maxPages, maxJobs });
+): Promise<HelloJobsPayload> {
+  const result = await fetchHelloJobs({ maxPages, maxJobs });
   return {
     ok: true,
-    source: "Jobscall.me",
-    sourceUrl: JOBSCALL_BASE,
+    source: "Hello-Jobs.com",
+    sourceUrl: HELLOJOBS_BASE,
     note:
-      "Commercial Macau job board (employer pages on jobscall.me). Listings are aggregated from public employer posts; always apply on the original Jobscall page. Not official DSAL data.",
+      "Commercial Macau job board (hello-jobs.com / jobsearch). Listings are aggregated from public search results; always apply on the original Hello-Jobs page. Not official DSAL data.",
     fetchedAt: result.fetchedAt,
     cached: false,
     stats: {
-      companies: result.companies,
+      pagesFetched: result.pagesFetched,
+      totalOnBoard: result.totalOnBoard,
       returned: result.jobs.length,
     },
     jobs: result.jobs,
@@ -62,9 +64,9 @@ async function buildPayload(
 }
 
 /**
- * GET /api/jobscall/jobs
+ * GET /api/hellojobs/jobs
  * Query:
- *  - pages= (default 50, max 80 — ~20 employers/page; walk until catalog ends)
+ *  - pages= (default 67 ≈ 1000 jobs @ ~15/page, max 120)
  *  - limit= (default 1000, max 1000)
  *  - force=1  bypass server cache
  */
@@ -72,8 +74,8 @@ export async function GET(req: NextRequest) {
   const { searchParams } = req.nextUrl;
   const force = searchParams.get("force") === "1";
   const maxPages = Math.min(
-    80,
-    Math.max(1, Number(searchParams.get("pages") || 50))
+    120,
+    Math.max(1, Number(searchParams.get("pages") || 67))
   );
   const maxJobs = Math.min(
     1000,
@@ -128,7 +130,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json(
         {
           ...stale.payload,
-          note: `Serving cached Jobscall data after error: ${message}`,
+          note: `Serving cached Hello-Jobs data after error: ${message}`,
           cached: true,
         },
         { headers: { "X-MYEIB-Cache": "STALE" } }
@@ -139,7 +141,7 @@ export async function GET(req: NextRequest) {
         ok: false,
         error: message,
         jobs: [],
-        note: "Could not reach jobscall.me.",
+        note: "Could not reach hello-jobs.com.",
       },
       { status: 502 }
     );

@@ -6,6 +6,7 @@ import {
   MapPin,
   Banknote,
   Clock,
+  CalendarDays,
   Sparkles,
   GraduationCap,
   ShieldCheck,
@@ -13,15 +14,52 @@ import {
   ExternalLink,
   Bot,
 } from "lucide-react";
-import type { JobPosting } from "@/lib/types";
+import type { JobPosting, Lang } from "@/lib/types";
 import { useApp } from "@/context/AppContext";
 import { laneLabel, sectorLabel } from "@/lib/i18n";
 import { formatPay } from "@/lib/matching";
 import { PayBenchmarkPanel } from "@/components/PayBenchmark";
 import { EmployerTransparencyPanel } from "@/components/EmployerTransparency";
+import { NrwIntentPanel } from "@/components/NrwIntentPanel";
+import { SalaryNegotiatePanel } from "@/components/SalaryNegotiatePanel";
 import type { AiVerdict, JobAiStrip } from "@/lib/job-ai-types";
 import { pickCat } from "@/lib/cat-gallery";
 import clsx from "clsx";
+
+/** Format job.postedAt for cards (YYYY-MM-DD, ISO, or M/D/YYYY). */
+export function formatJobPostedAt(
+  postedAt: string | undefined | null,
+  lang: Lang
+): string | null {
+  if (!postedAt || !String(postedAt).trim()) return null;
+  const raw = String(postedAt).trim();
+  let d: Date | null = null;
+  const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) {
+    d = new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]));
+  } else {
+    const mdY = raw.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if (mdY) {
+      d = new Date(Number(mdY[3]), Number(mdY[1]) - 1, Number(mdY[2]));
+    } else {
+      const t = Date.parse(raw);
+      if (!Number.isNaN(t)) d = new Date(t);
+    }
+  }
+  if (!d || Number.isNaN(d.getTime())) {
+    // Show raw short string rather than hide entirely
+    return raw.length <= 16 ? raw : raw.slice(0, 10);
+  }
+  try {
+    return d.toLocaleDateString(lang === "zh" ? "zh-MO" : "en-GB", {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    });
+  } catch {
+    return d.toISOString().slice(0, 10);
+  }
+}
 
 function verdictChip(v: AiVerdict, zh: boolean) {
   const label =
@@ -63,8 +101,15 @@ function JobCardInner({
 }) {
   const { lang, tr, applyToJob, applications, youth } = useApp();
   const zh = lang === "zh";
-  const title = zh ? job.titleZh : job.title;
-  const company = zh ? job.companyZh : job.company;
+  const decode = (s: string) =>
+    (s || "")
+      .replace(/&amp;/gi, "&")
+      .replace(/&lt;/gi, "<")
+      .replace(/&gt;/gi, ">")
+      .replace(/&quot;/gi, '"')
+      .replace(/&#39;/g, "'");
+  const title = decode(zh ? job.titleZh : job.title);
+  const company = decode(zh ? job.companyZh : job.company);
   const district = zh ? job.districtZh : job.district;
   const desc = zh ? job.descriptionZh : job.description;
   const already =
@@ -74,6 +119,7 @@ function JobCardInner({
     typeof aiStrip?.fitScore === "number" ? aiStrip.fitScore : matchScore;
   const scoreIsAi = typeof aiStrip?.fitScore === "number";
   const catBuddy = pickCat(job.id);
+  const postedLabel = formatJobPostedAt(job.postedAt, lang);
 
   return (
     <article className="group relative flex flex-col overflow-hidden rounded-3xl border border-joob-coral/15 bg-white/95 shadow-card transition hover:border-joob-coral/40 hover:shadow-cat">
@@ -111,6 +157,11 @@ function JobCardInner({
             {job.source === "jobscall" && (
               <span className="inline-flex items-center gap-1 rounded-full bg-joob-mintDeep px-2.5 py-0.5 text-[11px] font-semibold text-white">
                 <ExternalLink className="h-3 w-3" /> {tr("sourceJobscall")}
+              </span>
+            )}
+            {job.source === "hellojobs" && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-amber-600 px-2.5 py-0.5 text-[11px] font-semibold text-white">
+                <ExternalLink className="h-3 w-3" /> {tr("sourceHelloJobs")}
               </span>
             )}
             <span className="rounded-full bg-joob-sky px-2.5 py-0.5 text-[11px] font-semibold text-joob-coral">
@@ -187,6 +238,15 @@ function JobCardInner({
       )}
 
       <div className="mt-4 flex flex-wrap gap-3 text-xs text-macau-navy/55">
+        {postedLabel && (
+          <span
+            className="inline-flex items-center gap-1 font-medium text-macau-navy/70"
+            title={job.postedAt}
+          >
+            <CalendarDays className="h-3.5 w-3.5 text-joob-coral/80" />
+            {zh ? "發佈" : "Posted"} {postedLabel}
+          </span>
+        )}
         <span className="inline-flex items-center gap-1">
           <MapPin className="h-3.5 w-3.5" /> {district}
         </span>
@@ -212,6 +272,14 @@ function JobCardInner({
         <PayBenchmarkPanel job={job} compact />
       </div>
 
+      <div className="mt-0">
+        <NrwIntentPanel job={job} compact />
+      </div>
+
+      <div className="mt-0">
+        <SalaryNegotiatePanel job={job} compact />
+      </div>
+
       {!compact && (
         <EmployerTransparencyPanel job={job} compact />
       )}
@@ -229,31 +297,41 @@ function JobCardInner({
         </div>
       )}
 
-      <div className="mt-4 flex items-center gap-2">
+      <div className="mt-4 flex flex-wrap items-center gap-2">
         <button
           type="button"
           disabled={
-            !!already && job.source !== "dsal" && job.source !== "jobscall"
+            !!already &&
+            job.source !== "dsal" &&
+            job.source !== "jobscall" &&
+            job.source !== "hellojobs"
           }
           onClick={() => applyToJob(job.id)}
           className={clsx(
             "rounded-xl px-4 py-2 text-sm font-semibold transition",
-            already && job.source !== "dsal" && job.source !== "jobscall"
+            already &&
+              job.source !== "dsal" &&
+              job.source !== "jobscall" &&
+              job.source !== "hellojobs"
               ? "bg-macau-navy/10 text-macau-navy/40 cursor-not-allowed"
               : job.source === "dsal"
                 ? "bg-macau-navy text-white hover:bg-macau-navy/90 shadow-sm"
                 : job.source === "jobscall"
                   ? "bg-macau-teal text-white hover:bg-macau-teal/90 shadow-sm"
-                  : "bg-macau-red text-white hover:bg-macau-red/90 shadow-sm"
+                  : job.source === "hellojobs"
+                    ? "bg-amber-600 text-white hover:bg-amber-700 shadow-sm"
+                    : "bg-macau-red text-white hover:bg-macau-red/90 shadow-sm"
           )}
         >
           {job.source === "dsal"
             ? tr("applyOfficial")
             : job.source === "jobscall"
               ? tr("applyJobscall")
-              : already
-                ? tr("applied")
-                : tr("apply")}
+              : job.source === "hellojobs"
+                ? tr("applyHelloJobs")
+                : already
+                  ? tr("applied")
+                  : tr("apply")}
         </button>
         <Link
           href={`/jobs/${job.id}`}
@@ -281,6 +359,17 @@ function JobCardInner({
           >
             <ExternalLink className="h-3.5 w-3.5" />
             Jobscall
+          </a>
+        )}
+        {job.source === "hellojobs" && job.externalUrl && (
+          <a
+            href={job.externalUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 rounded-xl px-3 py-2 text-xs font-medium text-amber-700 hover:bg-amber-50 transition"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+            Hello-Jobs
           </a>
         )}
         <span className="ml-auto text-xs text-macau-navy/40">

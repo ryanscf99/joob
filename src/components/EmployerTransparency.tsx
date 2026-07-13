@@ -40,11 +40,20 @@ export function EmployerTransparencyPanel({
   compact?: boolean;
 }) {
   const { lang, tr } = useApp();
-  const company = lang === "zh" ? job.companyZh : job.company;
+  const decode = (s: string) =>
+    (s || "")
+      .replace(/&amp;/gi, "&")
+      .replace(/&lt;/gi, "<")
+      .replace(/&gt;/gi, ">")
+      .replace(/&quot;/gi, '"')
+      .replace(/&#39;/g, "'");
+  const company = decode(lang === "zh" ? job.companyZh : job.company);
+  const companyEn = decode(job.company || "");
+  const companyZh = decode(job.companyZh || "");
   const companyKey =
-    job.company && job.companyZh && job.company === job.companyZh
-      ? job.company
-      : `${job.company} ${job.companyZh}`.trim();
+    companyEn && companyZh && companyEn === companyZh
+      ? companyEn
+      : `${companyEn} ${companyZh}`.trim();
 
   const fallback = lookupEmployerWorkforce(companyKey, job.sector);
   const [w, setW] = useState<EmployerWorkforce | null>(fallback);

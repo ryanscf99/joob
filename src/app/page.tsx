@@ -32,32 +32,35 @@ export default function HomePage() {
     <div className="paw-bg">
       {/* Hero */}
       <section className="hero-grid border-b border-joob-coral/10">
-        <div className="mx-auto max-w-6xl px-4 py-12 md:py-16">
-          <div className="grid items-center gap-10 lg:grid-cols-2">
+        <div className="mx-auto max-w-6xl px-4 py-8 sm:py-12 md:py-16">
+          <div className="grid items-center gap-8 sm:gap-10 lg:grid-cols-2">
             <div>
-              <div className="inline-flex items-center gap-2 rounded-full border border-joob-coral/20 bg-white/90 px-3 py-1 text-xs font-semibold text-joob-cocoaSoft shadow-sm">
-                <Database className="h-3.5 w-3.5 text-joob-coral" />
-                data.gov.mo · DSEC · DSAL · <PawDot />
+              <div className="inline-flex max-w-full flex-wrap items-center gap-2 rounded-full border border-joob-coral/20 bg-white/90 px-3 py-1.5 text-xs font-semibold text-joob-cocoaSoft shadow-sm">
+                <Database className="h-3.5 w-3.5 shrink-0 text-joob-coral" />
+                <span className="truncate">data.gov.mo · DSEC · DSAL</span>
+                <PawDot />
               </div>
-              <h1 className="mt-5 max-w-xl text-4xl font-extrabold tracking-tight text-joob-cocoa text-balance md:text-5xl">
+              <h1 className="mt-4 sm:mt-5 max-w-xl text-3xl font-extrabold tracking-tight text-joob-cocoa text-balance sm:text-4xl md:text-5xl">
                 {tr("heroTitle")}
               </h1>
-              <p className="mt-4 max-w-xl text-lg leading-relaxed text-joob-cocoaSoft">
+              <p className="mt-3 sm:mt-4 max-w-xl text-base sm:text-lg leading-relaxed text-joob-cocoaSoft">
                 {tr("heroSub")}
               </p>
-              <div className="mt-8 flex flex-wrap gap-3">
-                <Link href="/jobs" className="joob-btn-primary">
+              <div className="mt-6 sm:mt-8 flex flex-col gap-2.5 sm:flex-row sm:flex-wrap sm:gap-3">
+                <Link href="/jobs" className="joob-btn-primary w-full sm:w-auto">
                   {tr("ctaFindJobs")} <ArrowRight className="h-4 w-4" />
                 </Link>
-                <Link href="/match" className="joob-btn-secondary">
+                <Link href="/match" className="joob-btn-secondary w-full sm:w-auto">
                   {tr("ctaMatch")} 🐱
                 </Link>
-                <Link href="/faculty" className="joob-btn-ghost">
-                  {lang === "zh" ? "高校教職" : "Faculty"}
-                </Link>
-                <Link href="/dashboard" className="joob-btn-ghost">
-                  {tr("ctaDashboard")}
-                </Link>
+                <div className="flex gap-2.5">
+                  <Link href="/faculty" className="joob-btn-ghost flex-1 sm:flex-none">
+                    {lang === "zh" ? "高校教職" : "Faculty"}
+                  </Link>
+                  <Link href="/install" className="joob-btn-ghost flex-1 sm:flex-none">
+                    {lang === "zh" ? "iPhone App" : "iPhone App"}
+                  </Link>
+                </div>
               </div>
 
               <div className="mt-10 grid grid-cols-2 gap-3 sm:grid-cols-4">

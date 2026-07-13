@@ -44,8 +44,18 @@ export async function POST(req: NextRequest) {
     const lang: Lang = body.lang === "zh" ? "zh" : "en";
     const topN = Math.min(20, Math.max(3, Number(body.topN) || 12));
 
-    // Cap payload — client usually sends full match pool
-    const pool = jobs.slice(0, 120);
+    // Cap payload — public boards only (no seed / in-app demos)
+    const PUBLIC = new Set(["dsal", "jobscall", "hellojobs"]);
+    const pool = jobs
+      .filter((j) => !j.source || PUBLIC.has(j.source))
+      .slice(0, 120);
+
+    if (pool.length === 0) {
+      return NextResponse.json(
+        { ok: false, error: "No public vacancies to rank" },
+        { status: 400 }
+      );
+    }
 
     const officialJobs = (body.officialJobs || pool).filter(
       (j) => j.source === "dsal" || !j.source

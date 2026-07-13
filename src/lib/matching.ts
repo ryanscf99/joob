@@ -1,6 +1,7 @@
 import type { JobPosting, MatchResult, YouthProfile } from "./types";
 import { assessProfessionFit } from "./profession-fit";
 import { isLanguageOrSoftSkill } from "./professional-credentials";
+import { STANDARD_MONTHLY_HOURS } from "./wage-benchmark";
 
 function normalize(s: string) {
   return s.toLowerCase().trim();
@@ -173,6 +174,42 @@ export function matchJobsForYouth(
     }
     if (job.source === "jobscall") {
       score += 3;
+    }
+    if (job.source === "hellojobs") {
+      score += 3;
+    }
+
+    // Expected pay opportunity (listed band) — higher pay ranks up for local seekers
+    if (!prof.hardMismatch && !prof.credentialBlock) {
+      const lo = job.payMin > 0 ? job.payMin : 0;
+      const hi = job.payMax > 0 ? job.payMax : lo;
+      if (lo > 0 || hi > 0) {
+        const mid = (lo + (hi || lo)) / 2;
+        const monthly =
+          job.payUnit === "hourly" ? mid * STANDARD_MONTHLY_HOURS : mid;
+        if (monthly >= 20000) {
+          score += 8;
+          reasons.push("Higher listed pay band — stronger for local applicants");
+          reasonsZh.push("標示薪酬較高——較有利本地求職");
+        } else if (monthly >= 15000) {
+          score += 5;
+          reasons.push("Solid listed pay band");
+          reasonsZh.push("標示薪酬穩健");
+        } else if (monthly >= 12000) {
+          score += 2;
+        } else if (monthly > 0 && monthly < 9000) {
+          score -= 4;
+          reasons.push("Listed pay is low for local living costs");
+          reasonsZh.push("標示薪酬偏低，本地生活成本下吸引力弱");
+        }
+      }
+    }
+
+    // Prefer public boards only in ranking reasons (seed/platform should be hidden)
+    if (job.source === "seed" || job.source === "platform") {
+      score -= 40;
+      reasons.push("In-app demo listing (hidden from public browse)");
+      reasonsZh.push("本平台示範職缺（不對外顯示）");
     }
 
     score = Math.max(0, Math.min(100, score));

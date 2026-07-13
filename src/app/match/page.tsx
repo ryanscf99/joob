@@ -10,6 +10,8 @@ import type { CvFeatures } from "@/lib/cv-extract";
 import { demoYouth } from "@/lib/storage";
 import type { JobAiStrip } from "@/lib/job-ai-types";
 import type { MatchResult } from "@/lib/types";
+import { applyLocalHireAndSalaryToMatchResults } from "@/lib/match-rank-signals";
+import { lookupEmployerWorkforce } from "@/lib/employer-transparency";
 import {
   FileText,
   Sparkles,
@@ -49,6 +51,7 @@ export default function MatchPage() {
     setYouth,
     jobs,
     officialJobs,
+    wageBenchmarks,
     dsalLoading,
     dsalStats,
     refreshOfficialJobs,
@@ -69,11 +72,30 @@ export default function MatchPage() {
 
   const cvFeatures = (youth?.cv?.features as CvFeatures | undefined) || null;
 
-  // Rule baseline (always available for comparison / shortlist)
+  // Rule baseline + hard local-hire / pay caps (same panel logic as Local Hiring Likelihood)
   const ruleResults = useMemo(() => {
     if (!youth || !ran) return [] as MatchResult[];
-    return matchJobsWithCv(youth, jobs, cvFeatures);
-  }, [youth, jobs, ran, cvFeatures]);
+    const publicJobs = jobs.filter(
+      (j) =>
+        j.source === "dsal" ||
+        j.source === "jobscall" ||
+        j.source === "hellojobs"
+    );
+    const base = matchJobsWithCv(youth, publicJobs, cvFeatures);
+    return applyLocalHireAndSalaryToMatchResults(
+      base,
+      youth,
+      wageBenchmarks,
+      (job) => {
+        const key =
+          job.company && job.companyZh && job.company === job.companyZh
+            ? job.company
+            : `${job.company} ${job.companyZh}`.trim();
+        return lookupEmployerWorkforce(key, job.sector);
+      },
+      cvFeatures
+    );
+  }, [youth, jobs, ran, cvFeatures, wageBenchmarks]);
 
   // Display: LLM scores as primary when present
   const displayResults = useMemo((): DisplayMatchRow[] => {
@@ -198,22 +220,42 @@ export default function MatchPage() {
     setLlmOrder(null);
     setAiOverview(null);
 
-    // Always compute rules first (instant UI baseline while LLM runs)
-    const baseline = matchJobsWithCv(youth, jobs, cvFeatures);
+    // Rules + local-hire caps (same as ruleResults) for shortlist order
+    const publicJobs = jobs.filter(
+      (j) =>
+        j.source === "dsal" ||
+        j.source === "jobscall" ||
+        j.source === "hellojobs"
+    );
+    const baseline = applyLocalHireAndSalaryToMatchResults(
+      matchJobsWithCv(youth, publicJobs, cvFeatures),
+      youth,
+      wageBenchmarks,
+      (job) => {
+        const key =
+          job.company && job.companyZh && job.company === job.companyZh
+            ? job.company
+            : `${job.company} ${job.companyZh}`.trim();
+        return lookupEmployerWorkforce(key, job.sector);
+      },
+      cvFeatures
+    );
 
     try {
       if (!preferLlm || xaiReady === false) {
         setScoringMode("rules");
         setAiOverview(
           zh
-            ? "使用規則配對分數。設定 XAI_API_KEY 後可改以 Grok 對職位描述與檔案／履歷做語義打分。"
-            : "Using rule-based scores. Set XAI_API_KEY to score job description ↔ profile/CV with Grok."
+            ? "使用規則配對：專業適合度 + 本地招聘可能性（「低」上限約 48 分）+ 預期薪酬。設定 XAI_API_KEY 後可用 Grok 語義打分（仍套用本地招聘護欄）。"
+            : "Using rules: profession fit + local hiring (Low capped ~48) + expected salary. Set XAI_API_KEY for Grok under the same local-hire guardrails."
         );
         return;
       }
 
-      // Send only shortlisted jobs for LLM (not full 400+ board)
-      const shortlist = baseline.slice(0, Math.max(maxJobs, 40)).map((r) => r.job);
+      // Shortlist already demotes Low local-hire — send top pool to LLM
+      const shortlist = baseline
+        .slice(0, Math.max(maxJobs, 40))
+        .map((r) => r.job);
       const res = await fetch("/api/ai/job-match", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -223,6 +265,7 @@ export default function MatchPage() {
           lang,
           maxJobs,
           cv: cvFeatures,
+          officialJobs: officialJobs.slice(0, 120),
         }),
       });
       const data = await res.json();
@@ -276,13 +319,13 @@ export default function MatchPage() {
       <h1 className="text-3xl font-bold text-macau-navy">{tr("smartMatchTitle")}</h1>
       <p className="mt-2 max-w-2xl text-macau-navy/60">
         {zh
-          ? "以 LLM 對「職位描述 ↔ 求職者檔案／履歷」做語義配對打分（輔以規則預篩與執業資格護欄）。無 API 金鑰時回退規則分數。"
-          : "LLM scores job description ↔ seeker profile/CV for credible fit (rule shortlist + credential guardrails). Falls back to rules without an API key."}
+          ? "公開職缺配對：專業適合度優先；本地招聘可能性「低」的職位配對分會被壓低（不會再以 100 分排第一）；並加權可提出的預期薪酬。"
+          : "Public vacancy matching: profession fit first; Low local-hiring ads are score-capped (no more perfect #1 ranks); higher expected proposed salary ranks up."}
       </p>
       <p className="mt-2 text-xs text-macau-navy/45">
         {zh
-          ? `配對池：本平台 ${Math.max(0, jobs.length - officialJobs.length)} + 勞工局官方 ${officialJobs.length}`
-          : `Match pool: ${Math.max(0, jobs.length - officialJobs.length)} in-app + ${officialJobs.length} DSAL official`}
+          ? `公開配對池：共 ${jobs.length} 個（勞工局 ${officialJobs.length} + 商業平台 ${Math.max(0, jobs.length - officialJobs.length)}）`
+          : `Public match pool: ${jobs.length} total (${officialJobs.length} DSAL + ${Math.max(0, jobs.length - officialJobs.length)} commercial boards)`}
         {dsalStats?.officialTotalVacancies != null &&
           ` · ${zh ? "市場空缺總數" : "market total"} ${dsalStats.officialTotalVacancies.toLocaleString()}`}
         {dsalLoading && ` · ${tr("loadingOfficial")}`}
