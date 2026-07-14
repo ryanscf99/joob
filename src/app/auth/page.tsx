@@ -42,10 +42,20 @@ export default function AuthPage() {
           : "Securely sync your profile, saved jobs, match history, and applications."}
       </p>
       {!configured ? (
-        <div className="mt-6 rounded-2xl bg-joob-peach p-4 text-sm text-joob-cocoa">
-          {zh
-            ? "目前為本機示範模式；設定 Supabase 環境變數後可啟用帳戶。"
-            : "Local demo mode is active. Configure Supabase environment variables to enable accounts."}
+        <div className="mt-6 space-y-3 rounded-2xl bg-joob-peach p-4 text-sm text-joob-cocoa">
+          <p className="font-semibold">
+            {zh ? "帳戶功能尚未啟用" : "Accounts not enabled on this deployment"}
+          </p>
+          <p>
+            {zh
+              ? "Vercel 需設定 NEXT_PUBLIC_SUPABASE_URL 與 NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY（或 ANON_KEY），並重新 Deploy 後才會生效。"
+              : "Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY (or ANON_KEY) in Vercel, then redeploy so they are baked into the client build."}
+          </p>
+          <p className="text-xs opacity-80">
+            {zh
+              ? "本機可用 .env.local；線上必須在 Vercel → Settings → Environment Variables 設定後 Redeploy。"
+              : "Local uses .env.local; production needs Vercel → Settings → Environment Variables, then Redeploy."}
+          </p>
         </div>
       ) : user ? (
         <div className="mt-6 rounded-2xl border bg-white p-5 shadow-card">
