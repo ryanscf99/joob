@@ -102,51 +102,65 @@ export default function MatchPage() {
     );
   }, [youth, jobs, ran, cvFeatures, wageBenchmarks]);
 
-  // Display: LLM scores as primary when present
+  // Display: use LLM fitScore when present, and ALWAYS re-sort by that score
+  // so Grok re-rank updates both numbers and list order (not just scores in place).
   const displayResults = useMemo((): DisplayMatchRow[] => {
     if (!ruleResults.length) return [];
 
+    const byId = new Map(ruleResults.map((r) => [r.job.id, r]));
+    const hasLlmScores = Object.keys(llmByJobId).length > 0;
+
+    const toRow = (r: MatchResult): DisplayMatchRow => {
+      const llm = llmByJobId[r.job.id];
+      return {
+        job: r.job,
+        score: typeof llm?.fitScore === "number" ? llm.fitScore : r.score,
+        reasons: llm?.reasons?.length
+          ? llm.reasons
+          : lang === "zh"
+            ? r.reasonsZh
+            : r.reasons,
+        reasonsZh: llm?.reasons?.length ? llm.reasons : r.reasonsZh,
+        evidence: r.evidence,
+        llm,
+      };
+    };
+
+    let ordered: DisplayMatchRow[];
+
     if (llmOrder?.length) {
-      const map = new Map(ruleResults.map((r) => [r.job.id, r]));
-      const ordered: DisplayMatchRow[] = [];
+      const seen = new Set<string>();
+      ordered = [];
       for (const id of llmOrder) {
-        const row = map.get(id);
-        const llm = llmByJobId[id];
-        if (!row) continue;
-        ordered.push({
-          job: row.job,
-          score: llm?.fitScore ?? row.score,
-          reasons: llm?.reasons?.length
-            ? llm.reasons
-            : lang === "zh"
-              ? row.reasonsZh
-              : row.reasons,
-          reasonsZh: llm?.reasons?.length ? llm.reasons : row.reasonsZh,
-          evidence: row.evidence,
-          llm,
-        });
+        const row = byId.get(id);
+        if (!row || seen.has(id)) continue;
+        seen.add(id);
+        ordered.push(toRow(row));
       }
-      // Append remaining rule-only jobs (lower priority, rule score)
       for (const r of ruleResults) {
-        if (llmOrder.includes(r.job.id)) continue;
-        ordered.push({
-          job: r.job,
-          score: r.score,
-          reasons: lang === "zh" ? r.reasonsZh : r.reasons,
-          reasonsZh: r.reasonsZh,
-          evidence: r.evidence,
-        });
+        if (seen.has(r.job.id)) continue;
+        ordered.push(toRow(r));
       }
-      return ordered;
+    } else {
+      ordered = ruleResults.map(toRow);
     }
 
-    return ruleResults.map((r) => ({
-      job: r.job,
-      score: r.score,
-      reasons: lang === "zh" ? r.reasonsZh : r.reasons,
-      reasonsZh: r.reasonsZh,
-      evidence: r.evidence,
-    }));
+    // Critical: after Grok returns scores, re-order by displayed score (desc).
+    // Prefer explicit LLM rank when both have it; otherwise pure score.
+    if (hasLlmScores) {
+      ordered.sort((a, b) => {
+        const ar = a.llm?.rank;
+        const br = b.llm?.rank;
+        if (typeof ar === "number" && typeof br === "number" && ar !== br) {
+          return ar - br;
+        }
+        if (b.score !== a.score) return b.score - a.score;
+        // Stable-ish tie-break: keep rule order via original index in ruleResults
+        return 0;
+      });
+    }
+
+    return ordered;
   }, [ruleResults, llmOrder, llmByJobId, lang]);
 
   const visibleResults = useMemo(
@@ -308,11 +322,20 @@ export default function MatchPage() {
         throw new Error(data.error || `HTTP ${res.status}`);
       }
 
-      const scores = (data.scores || []) as LlmScoreRow[];
+      // Sort by fitScore so display order always follows re-rank (API may vary)
+      const scores = ([...(data.scores || [])] as LlmScoreRow[]).sort(
+        (a, b) => (b.fitScore ?? 0) - (a.fitScore ?? 0)
+      );
+      scores.forEach((s, i) => {
+        s.rank = i + 1;
+      });
       const map: Record<string, LlmScoreRow> = {};
       for (const s of scores) map[s.jobId] = s;
+      // Set order + scores together so React re-renders list in Grok rank order
+      if (scores.length) {
+        setLlmOrder(scores.map((s) => s.jobId));
+      }
       setLlmByJobId(map);
-      if (scores.length) setLlmOrder(scores.map((s) => s.jobId));
       setAiOverview(data.overview || null);
       const usedGrok =
         data.provider === "xai" || data.meta?.usedGrok === true;
