@@ -8,12 +8,12 @@ export const HELLOJOBS_SEARCH_BASE = "https://jobsearch.hello-jobs.com";
 const LIST_PATH =
   "/Job-Search/Any-Functional-Area-Jobs-in-Macau/F-1.aspx";
 
-const FETCH_TIMEOUT_MS = 20_000;
-/** ~15 jobs/page → 67 pages ≈ 1000 listings */
-const DEFAULT_MAX_PAGES = 67;
-const DEFAULT_MAX_JOBS = 1000;
-/** Concurrent HTML page fetches */
-const PAGE_CONCURRENCY = 6;
+const FETCH_TIMEOUT_MS = 12_000;
+/** Defaults tuned for Vercel time limits + memory (~15 jobs/page) */
+const DEFAULT_MAX_PAGES = 40;
+const DEFAULT_MAX_JOBS = 500;
+/** Concurrent HTML page fetches (lower = less RAM spike) */
+const PAGE_CONCURRENCY = 4;
 
 export interface HelloJobsFetchResult {
   jobs: JobPosting[];

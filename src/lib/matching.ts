@@ -224,6 +224,26 @@ export function matchJobsForYouth(
       score,
       reasons: reasons.slice(0, 5),
       reasonsZh: reasonsZh.slice(0, 5),
+      evidence: {
+        strengths: reasons
+          .filter((reason) => /match|align|fit|training|nearby|official|higher|solid/i.test(reason))
+          .slice(0, 4),
+        gaps: reasons
+          .filter((reason) => /no |low|below|less|missing|barely/i.test(reason))
+          .slice(0, 3),
+        constraints: reasons
+          .filter((reason) => /age|18\\+|licen|credential|consent|requires/i.test(reason))
+          .slice(0, 3),
+        nextSteps:
+          youth.age < 18 && !youth.parentalConsent
+            ? ["Confirm guardian consent before applying"]
+            : job.trainingProvided
+              ? ["Ask the employer what training and progression are provided"]
+              : ["Verify requirements on the original listing before applying"],
+        confidence:
+          job.source === "dsal" && job.payMin > 0 ? "high" : job.description ? "medium" : "low",
+        algorithmVersion: "rules-2026.07",
+      },
     };
   });
 

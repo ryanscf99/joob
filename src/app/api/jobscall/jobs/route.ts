@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fetchJobscallJobs, JOBSCALL_BASE } from "@/lib/jobscall";
 import type { JobPosting } from "@/lib/types";
+import { slimJobs } from "@/lib/job-slim";
+import { createBoundedCache, createInflightMap } from "@/lib/server-cache";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
 interface JobscallJobsPayload {
   ok: true;
@@ -18,27 +21,12 @@ interface JobscallJobsPayload {
   jobs: JobPosting[];
 }
 
-type CacheEntry = {
-  expiresAt: number;
-  payload: JobscallJobsPayload;
-};
-
-const g = globalThis as unknown as {
-  __myeibJobscallCache?: Map<string, CacheEntry>;
-  __myeibJobscallInflight?: Map<string, Promise<JobscallJobsPayload>>;
-};
-
-const CACHE_TTL_MS = 15 * 60 * 1000; // 15 min — commercial board; avoid re-crawl on every click
-
-function cacheMap() {
-  if (!g.__myeibJobscallCache) g.__myeibJobscallCache = new Map();
-  return g.__myeibJobscallCache;
-}
-
-function inflightMap() {
-  if (!g.__myeibJobscallInflight) g.__myeibJobscallInflight = new Map();
-  return g.__myeibJobscallInflight;
-}
+const CACHE_TTL_MS = 20 * 60 * 1000;
+const cache = createBoundedCache<JobscallJobsPayload>({
+  maxEntries: 12,
+  name: "jobscall",
+});
+const inflight = createInflightMap<JobscallJobsPayload>("jobscall");
 
 async function buildPayload(
   maxPages: number,
@@ -57,39 +45,37 @@ async function buildPayload(
       companies: result.companies,
       returned: result.jobs.length,
     },
-    jobs: result.jobs,
+    jobs: slimJobs(result.jobs),
   };
 }
 
 /**
  * GET /api/jobscall/jobs
- * Query:
- *  - pages= (default 50, max 80 — ~20 employers/page; walk until catalog ends)
- *  - limit= (default 1000, max 1000)
- *  - force=1  bypass server cache
+ * pages= (default 30, max 60)  limit= (default 500, max 800)
  */
 export async function GET(req: NextRequest) {
   const { searchParams } = req.nextUrl;
   const force = searchParams.get("force") === "1";
   const maxPages = Math.min(
-    80,
-    Math.max(1, Number(searchParams.get("pages") || 50))
+    60,
+    Math.max(1, Number(searchParams.get("pages") || 30) || 30)
   );
   const maxJobs = Math.min(
-    1000,
-    Math.max(20, Number(searchParams.get("limit") || 1000))
+    800,
+    Math.max(20, Number(searchParams.get("limit") || 500) || 500)
   );
-  const cacheKey = `pages=${maxPages}|limit=${maxJobs}`;
+  const cacheKey = `jc|p=${maxPages}|l=${maxJobs}`;
 
   try {
     if (!force) {
-      const entry = cacheMap().get(cacheKey);
-      if (entry && Date.now() <= entry.expiresAt) {
+      const hit = cache.get(cacheKey);
+      if (hit) {
         return NextResponse.json(
-          { ...entry.payload, cached: true },
+          { ...hit, cached: true },
           {
             headers: {
-              "Cache-Control": `public, max-age=60, s-maxage=${Math.floor(CACHE_TTL_MS / 1000)}, stale-while-revalidate=180`,
+              "Cache-Control":
+                "public, max-age=60, s-maxage=300, stale-while-revalidate=600",
               "X-MYEIB-Cache": "HIT",
             },
           }
@@ -97,37 +83,28 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    const inflight = inflightMap();
-    let promise = inflight.get(cacheKey);
-    if (!promise) {
-      promise = buildPayload(maxPages, maxJobs).finally(() => {
-        inflight.delete(cacheKey);
-      });
-      inflight.set(cacheKey, promise);
-    }
-
-    const payload = await promise;
-    cacheMap().set(cacheKey, {
-      expiresAt: Date.now() + CACHE_TTL_MS,
-      payload: { ...payload, cached: false },
-    });
+    const payload = await inflight.run(cacheKey, () =>
+      buildPayload(maxPages, maxJobs)
+    );
+    cache.set(cacheKey, payload, CACHE_TTL_MS);
 
     return NextResponse.json(
       { ...payload, cached: false },
       {
         headers: {
-          "Cache-Control": `public, max-age=60, s-maxage=${Math.floor(CACHE_TTL_MS / 1000)}, stale-while-revalidate=180`,
+          "Cache-Control":
+            "public, max-age=60, s-maxage=300, stale-while-revalidate=600",
           "X-MYEIB-Cache": force ? "BYPASS" : "MISS",
         },
       }
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
-    const stale = cacheMap().get(cacheKey);
+    const stale = cache.get(cacheKey);
     if (stale) {
       return NextResponse.json(
         {
-          ...stale.payload,
+          ...stale,
           note: `Serving cached Jobscall data after error: ${message}`,
           cached: true,
         },

@@ -245,7 +245,6 @@ Sincerely,
 ${youth?.name || "Applicant"}`;
 
   const hits = research?.hits || [];
-  const hasWeb = hits.length > 0 || !!research?.wikiExtract;
 
   // Public-facing company brief built primarily from web hits
   const overviewParts: string[] = [];

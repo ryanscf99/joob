@@ -11,6 +11,7 @@ import {
 } from "@/lib/company-research";
 import { generateApplicationPack } from "@/lib/application-pack";
 import { isXaiConfigured } from "@/lib/xai";
+import { checkRateLimit, requireApiUser } from "@/lib/api-security";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
@@ -30,6 +31,10 @@ interface Body {
  */
 export async function POST(req: NextRequest) {
   try {
+    const limited = checkRateLimit(req, "application-pack", 4, 60_000);
+    if (limited) return limited;
+    const auth = await requireApiUser();
+    if (auth.response) return auth.response;
     const body = (await req.json()) as Body;
     const job = body.job;
     if (!job?.id || !job?.title) {

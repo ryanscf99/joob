@@ -81,6 +81,17 @@ export function addApplication(app: Application) {
   return true;
 }
 
+export function updateApplicationStatus(
+  applicationId: string,
+  status: Application["status"]
+) {
+  const apps = getApplications();
+  const next = apps.map((app) =>
+    app.id === applicationId ? { ...app, status } : app
+  );
+  localStorage.setItem(KEYS.apps, JSON.stringify(next));
+}
+
 export function getComplianceChecks(): Record<string, boolean> {
   if (typeof window === "undefined") return {};
   return safeParse(localStorage.getItem(KEYS.compliance), {});

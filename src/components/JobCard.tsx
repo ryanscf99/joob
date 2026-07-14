@@ -13,6 +13,7 @@ import {
   BadgeCheck,
   ExternalLink,
   Bot,
+  Bookmark,
 } from "lucide-react";
 import type { JobPosting, Lang } from "@/lib/types";
 import { useApp } from "@/context/AppContext";
@@ -99,7 +100,7 @@ function JobCardInner({
   /** Short AI / heuristic summary strip (from Smart Match batch or single advice) */
   aiStrip?: JobAiStrip | null;
 }) {
-  const { lang, tr, applyToJob, applications, youth } = useApp();
+  const { lang, tr, applyToJob, applications, youth, savedJobIds, toggleSaved } = useApp();
   const zh = lang === "zh";
   const decode = (s: string) =>
     (s || "")
@@ -120,6 +121,7 @@ function JobCardInner({
   const scoreIsAi = typeof aiStrip?.fitScore === "number";
   const catBuddy = pickCat(job.id);
   const postedLabel = formatJobPostedAt(job.postedAt, lang);
+  const isSaved = savedJobIds.has(job.id);
 
   return (
     <article className="group relative flex flex-col overflow-hidden rounded-3xl border border-joob-coral/15 bg-white/95 shadow-card transition hover:border-joob-coral/40 hover:shadow-cat">
@@ -181,6 +183,17 @@ function JobCardInner({
           </h3>
           <p className="text-sm text-joob-cocoaSoft">{company}</p>
         </div>
+        <button
+          type="button"
+          onClick={() => void toggleSaved(job)}
+          className={clsx(
+            "rounded-full border p-2",
+            isSaved ? "border-joob-coral bg-joob-peach text-joob-coral" : "border-macau-navy/10 text-macau-navy/45"
+          )}
+          aria-label={isSaved ? (zh ? "取消收藏" : "Unsave job") : zh ? "收藏職位" : "Save job"}
+        >
+          <Bookmark className={clsx("h-4 w-4", isSaved && "fill-current")} />
+        </button>
         {typeof displayScore === "number" && (
           <div
             className={clsx(
@@ -268,20 +281,22 @@ function JobCardInner({
         )}
       </div>
 
-      <div className="mt-3">
+      <div className="mt-3 hidden sm:block">
         <PayBenchmarkPanel job={job} compact />
       </div>
 
-      <div className="mt-0">
+      <div className="mt-0 hidden sm:block">
         <NrwIntentPanel job={job} compact />
       </div>
 
-      <div className="mt-0">
+      <div className="mt-0 hidden sm:block">
         <SalaryNegotiatePanel job={job} compact />
       </div>
 
       {!compact && (
-        <EmployerTransparencyPanel job={job} compact />
+        <div className="hidden md:block">
+          <EmployerTransparencyPanel job={job} compact />
+        </div>
       )}
 
       {reasons && reasons.length > 0 && (

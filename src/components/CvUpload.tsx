@@ -61,6 +61,7 @@ export function CvUpload({
 
       const body = new FormData();
       body.append("file", file);
+      body.append("consent", "accepted");
       const res = await fetch("/api/cv/parse", { method: "POST", body });
       const data = (await res.json()) as ParseResponse;
       if (!res.ok || !data.ok || !data.features) {

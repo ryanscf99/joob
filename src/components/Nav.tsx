@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
-import { Menu, X, Languages, Smartphone } from "lucide-react";
+import { Menu, X, Languages, Smartphone, UserRound } from "lucide-react";
 import { useApp } from "@/context/AppContext";
 import { JOOB_LOGO_SM } from "@/lib/cat-gallery";
 import clsx from "clsx";
@@ -87,6 +87,14 @@ export function Nav() {
         </nav>
 
         <div className="flex items-center gap-1.5 sm:gap-2">
+          <Link
+            href="/auth"
+            className="inline-flex min-h-[40px] items-center gap-1 rounded-full border border-joob-coral/20 bg-white px-2.5 py-2 text-xs font-semibold text-joob-cocoa"
+            aria-label={zh ? "帳戶" : "Account"}
+          >
+            <UserRound className="h-4 w-4" />
+            <span className="hidden sm:inline">{zh ? "帳戶" : "Account"}</span>
+          </Link>
           <Link
             href="/install"
             className="hidden sm:inline-flex items-center gap-1 rounded-full border border-joob-coral/25 bg-joob-peach/60 px-2.5 py-1.5 text-[11px] font-bold text-joob-cocoa hover:bg-joob-peach transition"

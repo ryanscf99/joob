@@ -2,12 +2,6 @@
  * Regression suite for multi-template CV extraction.
  * Run: node scripts/cv-regression.mjs
  */
-import { createRequire } from "module";
-import { pathToFileURL } from "url";
-import { register } from "node:module";
-import { pathToFileURL as p2u } from "node:url";
-
-// Use tsx if available via dynamic import of compiled logic through tsx
 import { spawnSync } from "child_process";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
@@ -16,16 +10,21 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = join(__dirname, "..");
 
 const result = spawnSync(
-  "npx",
+  process.execPath,
   [
-    "--yes",
+    "--import",
     "tsx",
-    "-e",
+    "--input-type=module",
+    "--eval",
     `
-import { CV_SAMPLES } from "./src/lib/cv-samples.ts";
-import { extractCvFeatures } from "./src/lib/cv-extract.ts";
-import { profileFromCv } from "./src/lib/cv-match.ts";
+import cvSamplesModule from "./src/lib/cv-samples.ts";
+import cvExtractModule from "./src/lib/cv-extract.ts";
+import cvMatchModule from "./src/lib/cv-match.ts";
 import { readFileSync } from "fs";
+
+const { CV_SAMPLES } = cvSamplesModule;
+const { extractCvFeatures } = cvExtractModule;
+const { profileFromCv } = cvMatchModule;
 
 let failed = 0;
 const rows = [];

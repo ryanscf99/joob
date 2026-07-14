@@ -56,6 +56,12 @@ export default function JobsPage() {
   const [lane, setLane] = useState<string>("");
   const [sector, setSector] = useState<string>("");
   const [source, setSource] = useState<SourceFilter>("all");
+  const [district, setDistrict] = useState("");
+  const [minPay, setMinPay] = useState(0);
+  const [days, setDays] = useState(0);
+  const [youthOnly, setYouthOnly] = useState(false);
+  const [minorsOnly, setMinorsOnly] = useState(false);
+  const [trainingOnly, setTrainingOnly] = useState(false);
   const [page, setPage] = useState(0);
   const [aiStrips, setAiStrips] = useState<Record<string, JobAiStrip>>({});
 
@@ -77,6 +83,35 @@ export default function JobsPage() {
     }
   }, []);
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    setQInput(params.get("q") || "");
+    setLane(params.get("lane") || "");
+    setSector(params.get("sector") || "");
+    setSource((params.get("source") as SourceFilter) || "all");
+    setDistrict(params.get("district") || "");
+    setMinPay(Number(params.get("minPay")) || 0);
+    setDays(Number(params.get("days")) || 0);
+    setYouthOnly(params.get("youth") === "1");
+    setMinorsOnly(params.get("minors") === "1");
+    setTrainingOnly(params.get("training") === "1");
+  }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams();
+    if (q) params.set("q", q);
+    if (lane) params.set("lane", lane);
+    if (sector) params.set("sector", sector);
+    if (source !== "all") params.set("source", source);
+    if (district) params.set("district", district);
+    if (minPay) params.set("minPay", String(minPay));
+    if (days) params.set("days", String(days));
+    if (youthOnly) params.set("youth", "1");
+    if (minorsOnly) params.set("minors", "1");
+    if (trainingOnly) params.set("training", "1");
+    window.history.replaceState(null, "", `${window.location.pathname}${params.size ? `?${params}` : ""}`);
+  }, [q, lane, sector, source, district, minPay, days, youthOnly, minorsOnly, trainingOnly]);
+
   const filtered = useMemo(() => {
     const query = q.toLowerCase().trim();
     return jobs.filter((j) => {
@@ -92,6 +127,16 @@ export default function JobsPage() {
       if (source === "hellojobs" && j.source !== "hellojobs") return false;
       if (lane && j.lane !== lane) return false;
       if (sector && j.sector !== sector) return false;
+      if (district && !`${j.district} ${j.districtZh}`.toLowerCase().includes(district.toLowerCase()))
+        return false;
+      if (minPay && Math.max(j.payMin, j.payMax) < minPay) return false;
+      if (youthOnly && !j.youthFriendly) return false;
+      if (minorsOnly && !j.minorAllowed) return false;
+      if (trainingOnly && !j.trainingProvided) return false;
+      if (days) {
+        const posted = Date.parse(j.postedAt);
+        if (!Number.isFinite(posted) || posted < Date.now() - days * 86400000) return false;
+      }
       if (!query) return true;
       const hay = [
         j.title,
@@ -107,12 +152,12 @@ export default function JobsPage() {
         .toLowerCase();
       return hay.includes(query);
     });
-  }, [jobs, q, lane, sector, source]);
+  }, [jobs, q, lane, sector, source, district, minPay, days, youthOnly, minorsOnly, trainingOnly]);
 
   // Reset page when filters change
   useEffect(() => {
     setPage(0);
-  }, [q, lane, sector, source]);
+  }, [q, lane, sector, source, district, minPay, days, youthOnly, minorsOnly, trainingOnly]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const safePage = Math.min(page, totalPages - 1);
@@ -284,6 +329,32 @@ export default function JobsPage() {
           ))}
         </select>
       </div>
+
+      <details className="mt-3 rounded-2xl border border-macau-navy/8 bg-white p-4 shadow-card">
+        <summary className="cursor-pointer text-sm font-semibold text-macau-navy">
+          {lang === "zh" ? "青年精準篩選" : "Youth-focused filters"}
+        </summary>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <select value={district} onChange={(e) => setDistrict(e.target.value)} className="rounded-xl border px-3 py-2 text-sm">
+            <option value="">{lang === "zh" ? "所有地區" : "All districts"}</option>
+            {["Macau Peninsula", "Taipa", "Cotai", "Coloane"].map((item) => <option key={item}>{item}</option>)}
+          </select>
+          <select value={minPay} onChange={(e) => setMinPay(Number(e.target.value))} className="rounded-xl border px-3 py-2 text-sm">
+            <option value={0}>{lang === "zh" ? "不限最低薪酬" : "Any minimum pay"}</option>
+            {[8000, 12000, 15000, 20000].map((amount) => <option key={amount} value={amount}>MOP {amount.toLocaleString()}+</option>)}
+          </select>
+          <select value={days} onChange={(e) => setDays(Number(e.target.value))} className="rounded-xl border px-3 py-2 text-sm">
+            <option value={0}>{lang === "zh" ? "所有發佈日期" : "Any posted date"}</option>
+            <option value={7}>{lang === "zh" ? "最近 7 日" : "Last 7 days"}</option>
+            <option value={30}>{lang === "zh" ? "最近 30 日" : "Last 30 days"}</option>
+          </select>
+          <div className="flex flex-col gap-2 text-sm">
+            <label><input type="checkbox" checked={youthOnly} onChange={(e) => setYouthOnly(e.target.checked)} className="mr-2" />{lang === "zh" ? "青年友善" : "Youth-friendly"}</label>
+            <label><input type="checkbox" checked={minorsOnly} onChange={(e) => setMinorsOnly(e.target.checked)} className="mr-2" />{lang === "zh" ? "接受未成年" : "Minors allowed"}</label>
+            <label><input type="checkbox" checked={trainingOnly} onChange={(e) => setTrainingOnly(e.target.checked)} className="mr-2" />{lang === "zh" ? "提供培訓" : "Training provided"}</label>
+          </div>
+        </div>
+      </details>
 
       <div className="mt-4 text-sm text-macau-navy/45">
         {filtered.length} {lang === "zh" ? "個職位" : "jobs"}

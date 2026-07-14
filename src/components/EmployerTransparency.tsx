@@ -133,6 +133,11 @@ export function EmployerTransparencyPanel({
                 DSAL A3
               </span>
             )}
+            {isBenchmark && (
+              <span className="rounded border border-amber-500/30 bg-amber-50 px-1.5 py-0.5 text-[9px] font-bold text-amber-800">
+                {lang === "zh" ? "行業估算" : "SECTOR ESTIMATE"}
+              </span>
+            )}
             {isGroup && (
               <span className="rounded bg-macau-teal px-1.5 py-0.5 text-[9px] font-bold text-white">
                 {lang === "zh"
@@ -154,7 +159,7 @@ export function EmployerTransparencyPanel({
           </span>
         </div>
         <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-macau-navy/60">
-          <span>
+          <span title={isBenchmark ? (lang === "zh" ? "不是企業級數據" : "Not firm-level data") : undefined}>
             {tr("workforceTotal")}:{" "}
             <strong className="text-macau-navy">
               {formatHeadcount(w.totalEmployees, lang)}

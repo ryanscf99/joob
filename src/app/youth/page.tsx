@@ -7,6 +7,16 @@ import type { JobLane, Sector, YouthProfile } from "@/lib/types";
 import { laneLabel, sectorLabel } from "@/lib/i18n";
 import { demoYouth } from "@/lib/storage";
 import { CvUpload } from "@/components/CvUpload";
+import { useAuth } from "@/components/auth/AuthProvider";
+import {
+  deleteSeekerData,
+  loadAlerts,
+  loadSavedJobs,
+  saveAlert,
+  updateApplicationStatus,
+  type JobAlert,
+  type SavedJob,
+} from "@/lib/repositories/seeker-repository";
 
 const ALL_LANES: JobLane[] = ["summer", "part-time", "internship", "full-time"];
 const ALL_SECTORS: Sector[] = [
@@ -22,6 +32,10 @@ const ALL_SECTORS: Sector[] = [
 
 export default function YouthPage() {
   const { tr, lang, youth, setYouth, applications, jobs } = useApp();
+  const { user } = useAuth();
+  const [savedJobs, setSavedJobs] = useState<SavedJob[]>([]);
+  const [alerts, setAlerts] = useState<JobAlert[]>([]);
+  const [alertName, setAlertName] = useState("");
   const [form, setForm] = useState({
     name: "",
     age: 17,
@@ -53,6 +67,13 @@ export default function YouthPage() {
       });
     }
   }, [youth]);
+
+  useEffect(() => {
+    void Promise.all([loadSavedJobs(), loadAlerts()]).then(([saved, nextAlerts]) => {
+      setSavedJobs(saved);
+      setAlerts(nextAlerts);
+    });
+  }, [user?.id]);
 
   const toggleLane = (l: JobLane) => {
     setForm((f) => ({
@@ -300,20 +321,130 @@ export default function YouthPage() {
                         ? lang === "zh"
                           ? job.titleZh
                           : job.title
-                        : a.jobId}
+                        : a.titleSnapshot || a.jobId}
                     </div>
+                    {!job && a.companySnapshot && (
+                      <div className="text-xs text-macau-navy/55">{a.companySnapshot}</div>
+                    )}
                     <div className="text-xs text-macau-navy/45">
                       {new Date(a.appliedAt).toLocaleString()}
                     </div>
                   </div>
-                  <span className="rounded-full bg-macau-sky px-2.5 py-0.5 text-xs font-medium text-macau-teal">
-                    {a.status}
-                  </span>
+                  <select
+                    value={a.status}
+                    onChange={async (event) => {
+                      await updateApplicationStatus(a.id, event.target.value as typeof a.status);
+                      window.location.reload();
+                    }}
+                    className="rounded-full bg-macau-sky px-2.5 py-1 text-xs font-medium text-macau-teal"
+                    aria-label={lang === "zh" ? "申請狀態" : "Application status"}
+                  >
+                    {["applied", "reviewing", "interview", "offered", "rejected", "withdrawn"].map((status) => (
+                      <option key={status} value={status}>{status}</option>
+                    ))}
+                  </select>
                 </li>
               );
             })}
           </ul>
         )}
+      </section>
+
+      <section className="mt-10">
+        <h2 className="text-xl font-bold text-macau-navy">
+          {lang === "zh" ? "收藏職位" : "Saved jobs"}
+        </h2>
+        {savedJobs.length === 0 ? (
+          <p className="mt-3 text-sm text-macau-navy/50">
+            {lang === "zh" ? "尚未收藏職位。" : "No saved jobs yet."}
+          </p>
+        ) : (
+          <div className="mt-4 grid gap-2 sm:grid-cols-2">
+            {savedJobs.map(({ job }) => (
+              <Link key={job.id} href={`/jobs/${job.id}`} className="rounded-xl border bg-white p-4 shadow-card">
+                <strong className="text-macau-navy">{lang === "zh" ? job.titleZh : job.title}</strong>
+                <p className="mt-1 text-xs text-macau-navy/50">{lang === "zh" ? job.companyZh : job.company}</p>
+              </Link>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="mt-10 rounded-2xl border bg-white p-5 shadow-card">
+        <h2 className="text-xl font-bold text-macau-navy">
+          {lang === "zh" ? "職位提示" : "Job alerts"}
+        </h2>
+        <p className="mt-1 text-xs text-macau-navy/55">
+          {lang === "zh"
+            ? "先建立站內提示；日後可選擇電郵通知。"
+            : "Create an in-app alert now; email delivery can be enabled later."}
+        </p>
+        <div className="mt-3 flex gap-2">
+          <input
+            value={alertName}
+            onChange={(event) => setAlertName(event.target.value)}
+            placeholder={lang === "zh" ? "例如：氹仔實習" : "e.g. Taipa internships"}
+            className="min-w-0 flex-1 rounded-xl border px-3 py-2 text-sm"
+          />
+          <button
+            type="button"
+            disabled={!alertName.trim()}
+            onClick={async () => {
+              await saveAlert(alertName.trim(), {
+                sectors: youth?.preferredSectors || [],
+                lanes: youth?.preferredLanes || [],
+                district: youth?.district || "",
+              });
+              setAlerts(await loadAlerts());
+              setAlertName("");
+            }}
+            className="rounded-xl bg-macau-teal px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
+          >
+            {lang === "zh" ? "新增" : "Add"}
+          </button>
+        </div>
+        <ul className="mt-3 space-y-1 text-sm text-macau-navy/65">
+          {alerts.map((alert) => <li key={alert.id}>· {alert.name}</li>)}
+        </ul>
+      </section>
+
+      <section className="mt-10 rounded-2xl border border-macau-red/15 bg-white p-5">
+        <h2 className="font-bold text-macau-navy">
+          {lang === "zh" ? "私隱與資料控制" : "Privacy and data controls"}
+        </h2>
+        <p className="mt-1 text-xs text-macau-navy/55">
+          {lang === "zh"
+            ? "jOOB 預設只保存結構化履歷特徵，不保存原始履歷檔案或全文。"
+            : "jOOB stores structured CV features by default, not the original file or full CV text."}
+        </p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              const blob = new Blob([JSON.stringify({ youth, applications, savedJobs, alerts }, null, 2)], { type: "application/json" });
+              const url = URL.createObjectURL(blob);
+              const anchor = document.createElement("a");
+              anchor.href = url;
+              anchor.download = "joob-data-export.json";
+              anchor.click();
+              URL.revokeObjectURL(url);
+            }}
+            className="rounded-xl border px-4 py-2 text-sm"
+          >
+            {lang === "zh" ? "匯出我的資料" : "Export my data"}
+          </button>
+          <button
+            type="button"
+            onClick={async () => {
+              if (!window.confirm(lang === "zh" ? "確定刪除所有求職資料？" : "Delete all job-seeker data?")) return;
+              await deleteSeekerData();
+              window.location.reload();
+            }}
+            className="rounded-xl border border-macau-red/30 px-4 py-2 text-sm text-macau-red"
+          >
+            {lang === "zh" ? "刪除求職資料" : "Delete seeker data"}
+          </button>
+        </div>
       </section>
     </div>
   );

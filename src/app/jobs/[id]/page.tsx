@@ -1,6 +1,7 @@
 "use client";
 
 import { useParams } from "next/navigation";
+import { useState } from "react";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -13,6 +14,9 @@ import {
   GraduationCap,
   BadgeCheck,
   ExternalLink,
+  Bookmark,
+  Sparkles,
+  CheckCircle2,
 } from "lucide-react";
 import { useApp } from "@/context/AppContext";
 import { laneLabel, sectorLabel } from "@/lib/i18n";
@@ -24,10 +28,24 @@ import { JobAiAdvicePanel } from "@/components/JobAiAdvice";
 import { NrwIntentPanel } from "@/components/NrwIntentPanel";
 import { SalaryNegotiatePanel } from "@/components/SalaryNegotiatePanel";
 import { pickCat } from "@/lib/cat-gallery";
+import { JobTrustSummary } from "@/components/JobTrustSummary";
+import { ApplicationPackModal } from "@/components/ApplicationPackModal";
 
 export default function JobDetailPage() {
   const { id } = useParams<{ id: string }>();
-  const { jobs, lang, tr, applyToJob, applications, youth } = useApp();
+  const {
+    jobs,
+    lang,
+    tr,
+    applyToJob,
+    applications,
+    youth,
+    savedJobIds,
+    toggleSaved,
+    confirmExternalApplication,
+  } = useApp();
+  const [packOpen, setPackOpen] = useState(false);
+  const [awaitingConfirmation, setAwaitingConfirmation] = useState(false);
   const job = jobs.find((j) => j.id === id);
 
   if (!job) {
@@ -139,6 +157,10 @@ export default function JobDetailPage() {
         </div>
 
         <div className="mt-6">
+          <JobTrustSummary job={job} />
+        </div>
+
+        <div className="mt-6">
           <PayBenchmarkPanel job={job} />
         </div>
 
@@ -217,13 +239,44 @@ export default function JobDetailPage() {
         <div className="mt-8 flex flex-wrap gap-3">
           <button
             type="button"
+            onClick={() => void toggleSaved(job)}
+            className="inline-flex items-center gap-2 rounded-xl border border-macau-navy/15 px-4 py-3 text-sm font-semibold"
+          >
+            <Bookmark className={savedJobIds.has(job.id) ? "h-4 w-4 fill-current text-joob-coral" : "h-4 w-4"} />
+            {savedJobIds.has(job.id)
+              ? lang === "zh" ? "已收藏" : "Saved"
+              : lang === "zh" ? "收藏" : "Save"}
+          </button>
+          <button
+            type="button"
+            disabled={!youth || (youth.age < 18 && !youth.parentalConsent)}
+            onClick={() => setPackOpen(true)}
+            className="inline-flex items-center gap-2 rounded-xl bg-joob-coral px-5 py-3 text-sm font-semibold text-white disabled:opacity-40"
+            title={
+              !youth
+                ? lang === "zh" ? "請先建立檔案" : "Create a profile first"
+                : youth.age < 18 && !youth.parentalConsent
+                  ? lang === "zh" ? "須先確認監護人同意" : "Guardian consent required"
+                  : undefined
+            }
+          >
+            <Sparkles className="h-4 w-4" />
+            {lang === "zh" ? "準備申請" : "Prepare application"}
+          </button>
+          <button
+            type="button"
             disabled={
               !!already &&
               job.source !== "dsal" &&
               job.source !== "jobscall" &&
               job.source !== "hellojobs"
             }
-            onClick={() => applyToJob(job.id)}
+            onClick={() => {
+              applyToJob(job.id);
+              if (job.source === "dsal" || job.source === "jobscall" || job.source === "hellojobs") {
+                setAwaitingConfirmation(true);
+              }
+            }}
             className="rounded-xl bg-macau-red px-6 py-3 text-sm font-semibold text-white disabled:opacity-40 hover:bg-macau-red/90 transition"
           >
             {job.source === "dsal"
@@ -270,8 +323,33 @@ export default function JobDetailPage() {
             </a>
           )}
         </div>
+        {awaitingConfirmation && (
+          <div className="mt-4 rounded-2xl border border-macau-teal/25 bg-macau-sky/40 p-4 text-sm">
+            <p className="font-semibold text-macau-navy">
+              {lang === "zh"
+                ? "你已在原網站完成申請嗎？"
+                : "Did you complete the application on the original site?"}
+            </p>
+            <p className="mt-1 text-xs text-macau-navy/60">
+              {lang === "zh"
+                ? "確認後會加入追蹤，並預設七日後跟進。"
+                : "Confirm to add it to your tracker with a seven-day follow-up."}
+            </p>
+            <button
+              type="button"
+              onClick={async () => {
+                if (await confirmExternalApplication(job.id)) setAwaitingConfirmation(false);
+              }}
+              className="mt-3 inline-flex items-center gap-2 rounded-xl bg-macau-teal px-4 py-2 font-semibold text-white"
+            >
+              <CheckCircle2 className="h-4 w-4" />
+              {lang === "zh" ? "是，我已申請" : "Yes, I applied"}
+            </button>
+          </div>
+        )}
         </div>
       </div>
+      <ApplicationPackModal job={job} open={packOpen} onClose={() => setPackOpen(false)} />
     </div>
   );
 }

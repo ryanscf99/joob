@@ -55,7 +55,13 @@ export function getDsalCache(key: string): DsalJobsPayload | null {
 }
 
 export function setDsalCache(key: string, payload: DsalJobsPayload) {
-  cacheMap().set(key, {
+  const m = cacheMap();
+  // Bound size — keep last ~16 modes only
+  if (m.size >= 16) {
+    const first = m.keys().next().value;
+    if (first !== undefined) m.delete(first);
+  }
+  m.set(key, {
     expiresAt: Date.now() + DSAL_CACHE_TTL_MS,
     payload: { ...payload, cached: false },
   });

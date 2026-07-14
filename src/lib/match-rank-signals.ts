@@ -58,6 +58,7 @@ export function listingMidMonthly(job: JobPosting): number {
 
 /**
  * Compute local-hire + expected-propose signals for one job.
+ * @param opts.fast - skip full salary-negotiate heuristic (Smart Match speed path)
  */
 export function computeJobRankSignals(
   job: JobPosting,
@@ -67,7 +68,8 @@ export function computeJobRankSignals(
     | Record<string, SectorWageBenchmark>
     | null
     | undefined,
-  workforce?: EmployerWorkforce | null
+  workforce?: EmployerWorkforce | null,
+  opts?: { fast?: boolean }
 ): JobRankSignals {
   const bm = (benchmarks || {}) as Record<Sector, SectorWageBenchmark>;
   const local = assessLocalHiringLikelihood(job, bm, workforce ?? null);
@@ -80,20 +82,27 @@ export function computeJobRankSignals(
       ? cmp.deviationPct
       : null;
 
+  // Prefer listing mid; only run full negotiate heuristic when needed
+  // (fast path for Smart Match ranking — avoid per-job negotiate cost)
   let expectedProposeMonthly = listingMid || 0;
-  try {
-    const advice = buildHeuristicSalaryAdvice({
-      job,
-      youth,
-      lang: "en",
-      benchmarks: bm as Record<string, SectorWageBenchmark>,
-    });
-    expectedProposeMonthly =
-      advice.unit === "hourly"
-        ? advice.proposeTarget * STANDARD_MONTHLY_HOURS
-        : advice.proposeTarget;
-  } catch {
-    /* keep listing mid */
+  if (!opts?.fast) {
+    try {
+      const advice = buildHeuristicSalaryAdvice({
+        job,
+        youth,
+        lang: "en",
+        benchmarks: bm as Record<string, SectorWageBenchmark>,
+      });
+      expectedProposeMonthly =
+        advice.unit === "hourly"
+          ? advice.proposeTarget * STANDARD_MONTHLY_HOURS
+          : advice.proposeTarget;
+    } catch {
+      /* keep listing mid */
+    }
+  } else if (listingMid > 0) {
+    // Lightweight propose estimate: listing mid * mild education bump
+    expectedProposeMonthly = listingMid;
   }
 
   if (listingMid > 0) {
@@ -365,6 +374,22 @@ export function applyLocalHireAndSalaryToMatchResults(
       score: fin.fitScore,
       reasons: reasons.slice(0, 6),
       reasonsZh: reasonsZh.slice(0, 6),
+      evidence: {
+        ...(r.evidence || {
+          strengths: [],
+          gaps: [],
+          constraints: [],
+          nextSteps: [],
+          confidence: "medium" as const,
+          algorithmVersion: "rules-2026.07",
+        }),
+        gaps: fin.reasonEn
+          ? [fin.reasonEn, ...(r.evidence?.gaps || [])].slice(0, 4)
+          : r.evidence?.gaps || [],
+        constraints: fin.capped
+          ? [`Score ceiling: ${fin.ceiling}`, ...(r.evidence?.constraints || [])]
+          : r.evidence?.constraints || [],
+      },
     };
   });
 

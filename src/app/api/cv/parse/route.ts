@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { extractCvFeatures, extractCvFeaturesWithDebug } from "@/lib/cv-extract";
+import { extractCvFeaturesWithDebug } from "@/lib/cv-extract";
+import { checkRateLimit, noStoreJson, requireApiUser } from "@/lib/api-security";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -31,7 +32,17 @@ async function extractTextFromDocx(buffer: Buffer): Promise<string> {
  */
 export async function POST(req: NextRequest) {
   try {
+    const limited = checkRateLimit(req, "cv-parse", 6, 60_000);
+    if (limited) return limited;
+    const auth = await requireApiUser();
+    if (auth.response) return auth.response;
     const form = await req.formData();
+    if (form.get("consent") !== "accepted") {
+      return noStoreJson(
+        { ok: false, error: "Explicit consent is required before CV processing." },
+        { status: 400 }
+      );
+    }
     const file = form.get("file");
     if (!file || !(file instanceof File)) {
       return NextResponse.json(
@@ -92,7 +103,7 @@ export async function POST(req: NextRequest) {
     const { features, debug } = extractCvFeaturesWithDebug(text);
     const preview = text.slice(0, 1200);
 
-    return NextResponse.json({
+    return noStoreJson({
       ok: true,
       fileName: name,
       mime: type,
@@ -103,7 +114,6 @@ export async function POST(req: NextRequest) {
         layoutFamily: debug.layoutFamily,
         sectionsFound: debug.sectionsFound,
         confidence: debug.confidence,
-        nameCandidates: debug.nameCandidates.slice(0, 4),
       },
     });
   } catch (err) {

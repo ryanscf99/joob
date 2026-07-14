@@ -40,6 +40,48 @@ import {
   type EmployerWorkforce,
 } from "@/lib/employer-transparency";
 import { repairHelloJobsExternalUrl } from "@/lib/hellojobs";
+import {
+  loadApplications,
+  loadSavedJobs,
+  loadYouthProfile,
+  persistYouthProfile,
+  recordApplication,
+  toggleSavedJob,
+} from "@/lib/repositories/seeker-repository";
+import { slimJobs, setSessionJson, getSessionJson } from "@/lib/job-slim";
+
+/** Client board limits — enough recent ads without blowing RAM / sessionStorage */
+const JOBSCALL_CLIENT = { pages: "28", limit: "450" } as const;
+const HELLOJOBS_CLIENT = { pages: "35", limit: "450" } as const;
+const SESSION_TTL_MS = 20 * 60 * 1000;
+const FETCH_TIMEOUT_MS = 55_000;
+
+async function fetchJson(
+  url: string,
+  signal?: AbortSignal
+): Promise<{ res: Response; data: Record<string, unknown> }> {
+  const controller = new AbortController();
+  const onAbort = () => controller.abort();
+  if (signal) {
+    if (signal.aborted) controller.abort();
+    else signal.addEventListener("abort", onAbort, { once: true });
+  }
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, {
+      signal: controller.signal,
+      headers: { Accept: "application/json" },
+    });
+    const data = (await res.json().catch(() => ({}))) as Record<
+      string,
+      unknown
+    >;
+    return { res, data };
+  } finally {
+    clearTimeout(timer);
+    if (signal) signal.removeEventListener("abort", onAbort);
+  }
+}
 
 interface DsalStats {
   officialTotalVacancies: number | null;
@@ -94,6 +136,9 @@ interface AppContextValue {
   setEmployer: (p: EmployerProfile) => void;
   applications: Application[];
   applyToJob: (jobId: string, note?: string) => boolean;
+  confirmExternalApplication: (jobId: string, note?: string) => Promise<boolean>;
+  savedJobIds: Set<string>;
+  toggleSaved: (job: JobPosting) => Promise<void>;
   toast: string | null;
   showToast: (msg: string) => void;
 }
@@ -151,6 +196,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [youth, setYouthState] = useState<YouthProfile | null>(null);
   const [employer, setEmployerState] = useState<EmployerProfile | null>(null);
   const [applications, setApplications] = useState<Application[]>([]);
+  const [savedJobIds, setSavedJobIds] = useState<Set<string>>(new Set());
   const [toast, setToast] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(false);
   const [dsalLoading, setDsalLoading] = useState(false);
@@ -185,65 +231,57 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const force = opts?.force === true;
     setDsalError(null);
 
-    // Session cache first — no loading spinner on nav clicks
-    if (!force && typeof sessionStorage !== "undefined") {
-      try {
-        const cached = sessionStorage.getItem("myeib_dsal_jobs_v1");
-        if (cached) {
-          const parsed = JSON.parse(cached) as {
-            at: number;
-            data: {
-              jobs: JobPosting[];
-              stats: DsalStats | null;
-              fetchedAt: string;
-            };
-          };
-          if (
-            Date.now() - parsed.at < 15 * 60 * 1000 &&
-            parsed.data?.jobs?.length
-          ) {
-            setOfficialJobs(parsed.data.jobs);
-            setDsalStats(parsed.data.stats);
-            setDsalFetchedAt(parsed.data.fetchedAt);
-            return;
-          }
-        }
-      } catch {
-        /* ignore bad cache */
+    if (!force) {
+      const parsed = getSessionJson<{
+        at: number;
+        data: {
+          jobs: JobPosting[];
+          stats: DsalStats | null;
+          fetchedAt: string;
+        };
+      }>("myeib_dsal_jobs_v2");
+      if (
+        parsed &&
+        Date.now() - parsed.at < SESSION_TTL_MS &&
+        parsed.data?.jobs?.length
+      ) {
+        setOfficialJobs(parsed.data.jobs);
+        setDsalStats(parsed.data.stats);
+        setDsalFetchedAt(parsed.data.fetchedAt);
+        return;
       }
     }
 
     setDsalLoading(true);
     try {
-      const qs = new URLSearchParams({
-        mode: "youth",
-        limit: "80",
-      });
+      const qs = new URLSearchParams({ mode: "youth", limit: "80" });
       if (force) qs.set("force", "1");
-
-      const res = await fetch(`/api/dsal/jobs?${qs.toString()}`);
-      const data = await res.json();
+      const { res, data } = await fetchJson(`/api/dsal/jobs?${qs.toString()}`);
       if (!res.ok || !data.ok) {
-        throw new Error(data.error || `HTTP ${res.status}`);
-      }
-      const jobsList = (data.jobs || []) as JobPosting[];
-      setOfficialJobs(jobsList);
-      setDsalStats(data.stats || null);
-      const at = data.fetchedAt || new Date().toISOString();
-      setDsalFetchedAt(at);
-      try {
-        sessionStorage.setItem(
-          "myeib_dsal_jobs_v1",
-          JSON.stringify({
-            at: Date.now(),
-            data: { jobs: jobsList, stats: data.stats || null, fetchedAt: at },
-          })
+        throw new Error(
+          (data.error as string) || `HTTP ${res.status}`
         );
-      } catch {
-        /* quota / private mode */
       }
+      const jobsList = slimJobs((data.jobs || []) as JobPosting[]);
+      setOfficialJobs(jobsList);
+      setDsalStats((data.stats as DsalStats) || null);
+      const at = (data.fetchedAt as string) || new Date().toISOString();
+      setDsalFetchedAt(at);
+      setSessionJson("myeib_dsal_jobs_v2", {
+        at: Date.now(),
+        data: {
+          jobs: jobsList,
+          stats: (data.stats as DsalStats) || null,
+          fetchedAt: at,
+        },
+      });
     } catch (e) {
-      const msg = e instanceof Error ? e.message : "Failed to load DSAL jobs";
+      const msg =
+        e instanceof Error
+          ? e.name === "AbortError"
+            ? "DSAL request timed out"
+            : e.message
+          : "Failed to load DSAL jobs";
       setDsalError(msg);
     } finally {
       setDsalLoading(false);
@@ -254,66 +292,59 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const force = opts?.force === true;
     setJobscallError(null);
 
-    if (!force && typeof sessionStorage !== "undefined") {
-      try {
-        const cached = sessionStorage.getItem("myeib_jobscall_jobs_v3");
-        if (cached) {
-          const parsed = JSON.parse(cached) as {
-            at: number;
-            data: {
-              jobs: JobPosting[];
-              stats: JobscallStats | null;
-              fetchedAt: string;
-            };
-          };
-          if (
-            Date.now() - parsed.at < 15 * 60 * 1000 &&
-            parsed.data?.jobs?.length
-          ) {
-            setJobscallJobs(parsed.data.jobs);
-            setJobscallStats(parsed.data.stats);
-            setJobscallFetchedAt(parsed.data.fetchedAt);
-            return;
-          }
-        }
-      } catch {
-        /* ignore */
+    if (!force) {
+      const parsed = getSessionJson<{
+        at: number;
+        data: {
+          jobs: JobPosting[];
+          stats: JobscallStats | null;
+          fetchedAt: string;
+        };
+      }>("myeib_jobscall_jobs_v4");
+      if (
+        parsed &&
+        Date.now() - parsed.at < SESSION_TTL_MS &&
+        parsed.data?.jobs?.length
+      ) {
+        setJobscallJobs(parsed.data.jobs);
+        setJobscallStats(parsed.data.stats);
+        setJobscallFetchedAt(parsed.data.fetchedAt);
+        return;
       }
     }
 
     setJobscallLoading(true);
     try {
       const qs = new URLSearchParams({
-        pages: "50",
-        limit: "1000",
+        pages: JOBSCALL_CLIENT.pages,
+        limit: JOBSCALL_CLIENT.limit,
       });
       if (force) qs.set("force", "1");
-
-      const res = await fetch(`/api/jobscall/jobs?${qs.toString()}`);
-      const data = await res.json();
+      const { res, data } = await fetchJson(
+        `/api/jobscall/jobs?${qs.toString()}`
+      );
       if (!res.ok || !data.ok) {
-        throw new Error(data.error || `HTTP ${res.status}`);
-      }
-      const jobsList = (data.jobs || []) as JobPosting[];
-      setJobscallJobs(jobsList);
-      const stats = (data.stats || null) as JobscallStats | null;
-      setJobscallStats(stats);
-      const at = data.fetchedAt || new Date().toISOString();
-      setJobscallFetchedAt(at);
-      try {
-        sessionStorage.setItem(
-          "myeib_jobscall_jobs_v3",
-          JSON.stringify({
-            at: Date.now(),
-            data: { jobs: jobsList, stats, fetchedAt: at },
-          })
+        throw new Error(
+          (data.error as string) || `HTTP ${res.status}`
         );
-      } catch {
-        /* quota */
       }
+      const jobsList = slimJobs((data.jobs || []) as JobPosting[]);
+      setJobscallJobs(jobsList);
+      const stats = (data.stats as JobscallStats) || null;
+      setJobscallStats(stats);
+      const at = (data.fetchedAt as string) || new Date().toISOString();
+      setJobscallFetchedAt(at);
+      setSessionJson("myeib_jobscall_jobs_v4", {
+        at: Date.now(),
+        data: { jobs: jobsList, stats, fetchedAt: at },
+      });
     } catch (e) {
       const msg =
-        e instanceof Error ? e.message : "Failed to load Jobscall jobs";
+        e instanceof Error
+          ? e.name === "AbortError"
+            ? "Jobscall request timed out"
+            : e.message
+          : "Failed to load Jobscall jobs";
       setJobscallError(msg);
     } finally {
       setJobscallLoading(false);
@@ -324,66 +355,59 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const force = opts?.force === true;
     setHellojobsError(null);
 
-    if (!force && typeof sessionStorage !== "undefined") {
-      try {
-        const cached = sessionStorage.getItem("myeib_hellojobs_jobs_v2");
-        if (cached) {
-          const parsed = JSON.parse(cached) as {
-            at: number;
-            data: {
-              jobs: JobPosting[];
-              stats: HelloJobsStats | null;
-              fetchedAt: string;
-            };
-          };
-          if (
-            Date.now() - parsed.at < 15 * 60 * 1000 &&
-            parsed.data?.jobs?.length
-          ) {
-            setHellojobsJobs(parsed.data.jobs);
-            setHellojobsStats(parsed.data.stats);
-            setHellojobsFetchedAt(parsed.data.fetchedAt);
-            return;
-          }
-        }
-      } catch {
-        /* ignore */
+    if (!force) {
+      const parsed = getSessionJson<{
+        at: number;
+        data: {
+          jobs: JobPosting[];
+          stats: HelloJobsStats | null;
+          fetchedAt: string;
+        };
+      }>("myeib_hellojobs_jobs_v3");
+      if (
+        parsed &&
+        Date.now() - parsed.at < SESSION_TTL_MS &&
+        parsed.data?.jobs?.length
+      ) {
+        setHellojobsJobs(parsed.data.jobs);
+        setHellojobsStats(parsed.data.stats);
+        setHellojobsFetchedAt(parsed.data.fetchedAt);
+        return;
       }
     }
 
     setHellojobsLoading(true);
     try {
       const qs = new URLSearchParams({
-        pages: "67",
-        limit: "1000",
+        pages: HELLOJOBS_CLIENT.pages,
+        limit: HELLOJOBS_CLIENT.limit,
       });
       if (force) qs.set("force", "1");
-
-      const res = await fetch(`/api/hellojobs/jobs?${qs.toString()}`);
-      const data = await res.json();
+      const { res, data } = await fetchJson(
+        `/api/hellojobs/jobs?${qs.toString()}`
+      );
       if (!res.ok || !data.ok) {
-        throw new Error(data.error || `HTTP ${res.status}`);
-      }
-      const jobsList = (data.jobs || []) as JobPosting[];
-      setHellojobsJobs(jobsList);
-      const stats = (data.stats || null) as HelloJobsStats | null;
-      setHellojobsStats(stats);
-      const at = data.fetchedAt || new Date().toISOString();
-      setHellojobsFetchedAt(at);
-      try {
-        sessionStorage.setItem(
-          "myeib_hellojobs_jobs_v2",
-          JSON.stringify({
-            at: Date.now(),
-            data: { jobs: jobsList, stats, fetchedAt: at },
-          })
+        throw new Error(
+          (data.error as string) || `HTTP ${res.status}`
         );
-      } catch {
-        /* quota — large payload may not fit */
       }
+      const jobsList = slimJobs((data.jobs || []) as JobPosting[]);
+      setHellojobsJobs(jobsList);
+      const stats = (data.stats as HelloJobsStats) || null;
+      setHellojobsStats(stats);
+      const at = (data.fetchedAt as string) || new Date().toISOString();
+      setHellojobsFetchedAt(at);
+      setSessionJson("myeib_hellojobs_jobs_v3", {
+        at: Date.now(),
+        data: { jobs: jobsList, stats, fetchedAt: at },
+      });
     } catch (e) {
       const msg =
-        e instanceof Error ? e.message : "Failed to load Hello-Jobs listings";
+        e instanceof Error
+          ? e.name === "AbortError"
+            ? "Hello-Jobs request timed out"
+            : e.message
+          : "Failed to load Hello-Jobs listings";
       setHellojobsError(msg);
     } finally {
       setHellojobsLoading(false);
@@ -396,65 +420,68 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setYouthState(getYouth());
     setEmployerState(getEmployer());
     setApplications(getApplications());
+    void Promise.all([loadYouthProfile(), loadApplications(), loadSavedJobs()])
+      .then(([profile, apps, saved]) => {
+        if (profile) setYouthState(profile);
+        setApplications(apps);
+        setSavedJobIds(new Set(saved.map((item) => item.jobId)));
+      })
+      .catch(() => {
+        /* offline / supabase — keep localStorage defaults already set above */
+      });
 
-    // Warm-start jobs from session so nav clicks paint instantly (no empty wait)
+    // Warm-start jobs from session so nav clicks paint instantly
     try {
-      const dsalRaw = sessionStorage.getItem("myeib_dsal_jobs_v1");
-      if (dsalRaw) {
-        const parsed = JSON.parse(dsalRaw) as {
-          at: number;
-          data: {
-            jobs: JobPosting[];
-            stats: DsalStats | null;
-            fetchedAt: string;
-          };
+      const dsal = getSessionJson<{
+        at: number;
+        data: {
+          jobs: JobPosting[];
+          stats: DsalStats | null;
+          fetchedAt: string;
         };
-        if (
-          Date.now() - parsed.at < 15 * 60 * 1000 &&
-          parsed.data?.jobs?.length
-        ) {
-          setOfficialJobs(parsed.data.jobs);
-          setDsalStats(parsed.data.stats);
-          setDsalFetchedAt(parsed.data.fetchedAt);
-        }
+      }>("myeib_dsal_jobs_v2");
+      if (
+        dsal &&
+        Date.now() - dsal.at < SESSION_TTL_MS &&
+        dsal.data?.jobs?.length
+      ) {
+        setOfficialJobs(dsal.data.jobs);
+        setDsalStats(dsal.data.stats);
+        setDsalFetchedAt(dsal.data.fetchedAt);
       }
-      const jcRaw = sessionStorage.getItem("myeib_jobscall_jobs_v3");
-      if (jcRaw) {
-        const parsed = JSON.parse(jcRaw) as {
-          at: number;
-          data: {
-            jobs: JobPosting[];
-            stats: JobscallStats | null;
-            fetchedAt: string;
-          };
+      const jc = getSessionJson<{
+        at: number;
+        data: {
+          jobs: JobPosting[];
+          stats: JobscallStats | null;
+          fetchedAt: string;
         };
-        if (
-          Date.now() - parsed.at < 15 * 60 * 1000 &&
-          parsed.data?.jobs?.length
-        ) {
-          setJobscallJobs(parsed.data.jobs);
-          setJobscallStats(parsed.data.stats);
-          setJobscallFetchedAt(parsed.data.fetchedAt);
-        }
+      }>("myeib_jobscall_jobs_v4");
+      if (
+        jc &&
+        Date.now() - jc.at < SESSION_TTL_MS &&
+        jc.data?.jobs?.length
+      ) {
+        setJobscallJobs(jc.data.jobs);
+        setJobscallStats(jc.data.stats);
+        setJobscallFetchedAt(jc.data.fetchedAt);
       }
-      const hjRaw = sessionStorage.getItem("myeib_hellojobs_jobs_v2");
-      if (hjRaw) {
-        const parsed = JSON.parse(hjRaw) as {
-          at: number;
-          data: {
-            jobs: JobPosting[];
-            stats: HelloJobsStats | null;
-            fetchedAt: string;
-          };
+      const hj = getSessionJson<{
+        at: number;
+        data: {
+          jobs: JobPosting[];
+          stats: HelloJobsStats | null;
+          fetchedAt: string;
         };
-        if (
-          Date.now() - parsed.at < 15 * 60 * 1000 &&
-          parsed.data?.jobs?.length
-        ) {
-          setHellojobsJobs(parsed.data.jobs);
-          setHellojobsStats(parsed.data.stats);
-          setHellojobsFetchedAt(parsed.data.fetchedAt);
-        }
+      }>("myeib_hellojobs_jobs_v3");
+      if (
+        hj &&
+        Date.now() - hj.at < SESSION_TTL_MS &&
+        hj.data?.jobs?.length
+      ) {
+        setHellojobsJobs(hj.data.jobs);
+        setHellojobsStats(hj.data.stats);
+        setHellojobsFetchedAt(hj.data.fetchedAt);
       }
     } catch {
       /* private mode / quota */
@@ -496,7 +523,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           .filter((s) => s.length >= 2)
       ),
     ]
-      .slice(0, 80)
+      .slice(0, 48)
       .sort();
   }, [jobs]);
 
@@ -631,6 +658,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     (p: YouthProfile) => {
       saveYouth(p);
       setYouthState(p);
+      void persistYouthProfile(p).catch(() => {
+        showToast(
+          lang === "zh"
+            ? "雲端同步失敗，已保存在此裝置"
+            : "Cloud sync failed; saved on this device"
+        );
+      });
       showToast(t(lang, "successSaved"));
     },
     [lang, showToast]
@@ -709,6 +743,61 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [lang, showToast, jobs]
   );
 
+  const confirmExternalApplication = useCallback(
+    async (jobId: string, note?: string) => {
+      const job = jobs.find((item) => item.id === jobId);
+      const profile = getYouth();
+      if (!job || !profile) {
+        showToast(
+          lang === "zh" ? "請先建立青年檔案" : "Please create a youth profile first"
+        );
+        return false;
+      }
+      if (profile.age < 18 && !profile.parentalConsent) {
+        showToast(
+          lang === "zh"
+            ? "未成年求職者須先確認家長／監護人同意"
+            : "Guardian consent is required before tracking an application"
+        );
+        return false;
+      }
+      try {
+        const ok = await recordApplication(job, note);
+        if (ok) {
+          setApplications(await loadApplications());
+          showToast(lang === "zh" ? "已加入申請追蹤" : "Application added to tracker");
+        }
+        return ok;
+      } catch {
+        showToast(lang === "zh" ? "未能儲存申請" : "Could not save application");
+        return false;
+      }
+    },
+    [jobs, lang, showToast]
+  );
+
+  const toggleSaved = useCallback(
+    async (job: JobPosting) => {
+      const currentlySaved = savedJobIds.has(job.id);
+      try {
+        const saved = await toggleSavedJob(job, currentlySaved);
+        setSavedJobIds(new Set(saved.map((item) => item.jobId)));
+        showToast(
+          currentlySaved
+            ? lang === "zh"
+              ? "已移除收藏"
+              : "Removed from saved jobs"
+            : lang === "zh"
+              ? "已收藏職位"
+              : "Job saved"
+        );
+      } catch {
+        showToast(lang === "zh" ? "未能更新收藏" : "Could not update saved job");
+      }
+    },
+    [savedJobIds, lang, showToast]
+  );
+
   const value = useMemo(
     () => ({
       lang,
@@ -743,6 +832,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setEmployer,
       applications,
       applyToJob,
+      confirmExternalApplication,
+      savedJobIds,
+      toggleSaved,
       toast,
       showToast,
     }),
@@ -779,6 +871,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setEmployer,
       applications,
       applyToJob,
+      confirmExternalApplication,
+      savedJobIds,
+      toggleSaved,
       toast,
       showToast,
     ]

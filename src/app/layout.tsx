@@ -8,6 +8,9 @@ import { CatTVHost } from "@/components/CatTVHost";
 import { MobileTabBar } from "@/components/MobileTabBar";
 import { InstallAppBanner } from "@/components/InstallAppBanner";
 import { PwaRegister } from "@/components/PwaRegister";
+import { AuthProvider } from "@/components/auth/AuthProvider";
+import { DocumentLanguage } from "@/components/DocumentLanguage";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -64,17 +67,30 @@ export default function RootLayout({
       <body
         className={`${inter.variable} font-sans flex min-h-screen flex-col joob-app-shell`}
       >
-        <AppProvider>
-          <Nav />
-          <main className="flex-1 pb-[calc(4.5rem+env(safe-area-inset-bottom,0px))] lg:pb-0">
-            {children}
-          </main>
-          <Footer />
-          <MobileTabBar />
-          <InstallAppBanner />
-          <CatTVHost />
-          <PwaRegister />
-        </AppProvider>
+        <ErrorBoundary>
+          <AuthProvider>
+            <AppProvider>
+              <DocumentLanguage />
+              <a href="#main-content" className="skip-link">
+                Skip to main content
+              </a>
+              <Nav />
+              <main
+                id="main-content"
+                className="flex-1 pb-[calc(4.5rem+env(safe-area-inset-bottom,0px))] lg:pb-0"
+              >
+                <ErrorBoundary fallbackTitle="This page crashed">
+                  {children}
+                </ErrorBoundary>
+              </main>
+              <Footer />
+              <MobileTabBar />
+              <InstallAppBanner />
+              <CatTVHost />
+              <PwaRegister />
+            </AppProvider>
+          </AuthProvider>
+        </ErrorBoundary>
       </body>
     </html>
   );

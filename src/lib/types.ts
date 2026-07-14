@@ -111,9 +111,31 @@ export interface Application {
   id: string;
   jobId: string;
   youthId: string;
-  status: "applied" | "reviewing" | "interview" | "offered" | "rejected";
+  status:
+    | "saved"
+    | "preparing"
+    | "applied"
+    | "reviewing"
+    | "interview"
+    | "offered"
+    | "rejected"
+    | "withdrawn";
   appliedAt: string;
   note?: string;
+  source?: JobSource;
+  sourceUrl?: string;
+  titleSnapshot?: string;
+  companySnapshot?: string;
+  followUpAt?: string;
+}
+
+export interface MatchEvidence {
+  strengths: string[];
+  gaps: string[];
+  constraints: string[];
+  nextSteps: string[];
+  confidence: "high" | "medium" | "low";
+  algorithmVersion: string;
 }
 
 export interface MatchResult {
@@ -121,4 +143,5 @@ export interface MatchResult {
   score: number;
   reasons: string[];
   reasonsZh: string[];
+  evidence?: MatchEvidence;
 }

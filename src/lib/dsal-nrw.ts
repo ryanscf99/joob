@@ -801,13 +801,9 @@ export function resolveDsalWorkforceGroup(
 
   let residents = 0;
   let foreign = 0;
-  let specialized = 0;
-  let nonSpecialized = 0;
   for (const e of members) {
     residents += e.residents || 0;
     foreign += e.foreignTotal || 0;
-    specialized += e.specialized || 0;
-    nonSpecialized += e.nonSpecialized || 0;
   }
   const total = residents + foreign;
   const localSharePct = total

@@ -8,6 +8,7 @@ import {
 } from "@/lib/employer-transparency";
 import { resolveDsalWorkforceGroup } from "@/lib/dsal-nrw";
 import { isXaiConfigured } from "@/lib/xai";
+import { checkRateLimit, requireApiUser } from "@/lib/api-security";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 90;
@@ -26,6 +27,10 @@ interface Body {
  */
 export async function POST(req: NextRequest) {
   try {
+    const limited = checkRateLimit(req, "job-rank", 8, 60_000);
+    if (limited) return limited;
+    const auth = await requireApiUser({ optional: true });
+    if (auth.response) return auth.response;
     const body = (await req.json()) as Body;
     if (!body.youth?.id) {
       return NextResponse.json(

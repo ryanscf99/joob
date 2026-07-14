@@ -17,7 +17,6 @@ import type { JobPosting } from "@/lib/types";
 import type { SalaryNegotiateAdvice } from "@/lib/salary-negotiate";
 import { useApp } from "@/context/AppContext";
 import Link from "next/link";
-import clsx from "clsx";
 
 function formatAsk(n: number, unit: "monthly" | "hourly", zh: boolean) {
   const u = unit === "hourly" ? (zh ? "/時" : "/hr") : zh ? "/月" : "/mo";

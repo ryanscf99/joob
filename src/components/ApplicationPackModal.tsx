@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   X,
   Sparkles,
@@ -72,6 +72,7 @@ export function ApplicationPackModal({
   const [error, setError] = useState<string | null>(null);
   const [pack, setPack] = useState<ApplicationPack | null>(null);
   const [tab, setTab] = useState<"cv" | "letter" | "company">("company");
+  const closeRef = useRef<HTMLButtonElement>(null);
 
   const decode = (s: string) =>
     (s || "")
@@ -128,11 +129,16 @@ export function ApplicationPackModal({
 
   useEffect(() => {
     if (!open) return;
+    const previous = document.activeElement as HTMLElement | null;
+    window.setTimeout(() => closeRef.current?.focus(), 0);
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      previous?.focus();
+    };
   }, [open, onClose]);
 
   if (!open) return null;
@@ -165,7 +171,12 @@ export function ApplicationPackModal({
         aria-label="Close"
         onClick={onClose}
       />
-      <div className="relative z-[101] flex max-h-[92vh] w-full max-w-3xl flex-col overflow-hidden rounded-t-3xl border border-joob-coral/20 bg-joob-cream shadow-soft sm:rounded-3xl">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="application-pack-title"
+        className="relative z-[101] flex max-h-[92vh] w-full max-w-3xl flex-col overflow-hidden rounded-t-3xl border border-joob-coral/20 bg-joob-cream shadow-soft sm:rounded-3xl"
+      >
         {/* Header */}
         <div className="flex items-start justify-between gap-3 border-b border-joob-coral/15 bg-white px-4 py-3 sm:px-5">
           <div className="min-w-0">
@@ -173,15 +184,17 @@ export function ApplicationPackModal({
               <Sparkles className="h-3.5 w-3.5" />
               {zh ? "AI 申請準備包" : "AI application pack"}
             </div>
-            <h2 className="mt-0.5 truncate text-base font-extrabold text-joob-cocoa">
+            <h2 id="application-pack-title" className="mt-0.5 truncate text-base font-extrabold text-joob-cocoa">
               {title}
             </h2>
             <p className="truncate text-xs text-joob-cocoaSoft">{company}</p>
           </div>
           <button
+            ref={closeRef}
             type="button"
             onClick={onClose}
             className="rounded-full p-2 text-joob-cocoaSoft hover:bg-joob-peach"
+            aria-label={zh ? "關閉申請準備包" : "Close application pack"}
           >
             <X className="h-5 w-5" />
           </button>

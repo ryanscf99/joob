@@ -44,5 +44,8 @@ yarn-error.log*
 # Vercel
 .vercel
 
+# Local start helper log
+.joob-start.log
+
 # OS
 Thumbs.db

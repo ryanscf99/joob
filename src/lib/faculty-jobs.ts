@@ -459,7 +459,7 @@ export async function aggregateFacultyPositions(): Promise<{
         count: list.length,
         error: "HTML failed; used RSS",
       });
-    } catch (e2) {
+    } catch {
       sources.push({
         universityId: "um",
         ok: false,
@@ -558,7 +558,7 @@ export async function aggregateFacultyPositions(): Promise<{
         count: must.length,
         error: `API failed (${e instanceof Error ? e.message : "error"}); used HRO fallback`,
       });
-    } catch (e2) {
+    } catch {
       const stubs = portalStubPositions().filter(
         (p) => p.universityId === "must"
       );

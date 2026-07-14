@@ -4,13 +4,13 @@ import type { JobLane, JobPosting, Sector } from "./types";
 export const JOBSCALL_BASE = "https://www.jobscall.me";
 export const JOBSCALL_COLLECTION_JSON = `${JOBSCALL_BASE}/job?format=json`;
 
-const FETCH_TIMEOUT_MS = 15_000;
-/** 20 companies/page → 50 pages ≈ 1000 employers (catalog is finite; stops early) */
-const DEFAULT_MAX_PAGES = 50;
-const MAX_ROLES_PER_COMPANY = 10;
+const FETCH_TIMEOUT_MS = 12_000;
+/** 20 companies/page — defaults balanced for serverless timeout + memory */
+const DEFAULT_MAX_PAGES = 30;
+const MAX_ROLES_PER_COMPANY = 8;
 /** First pass: take this many roles per employer so large casinos don’t crowd out SMEs */
-const FAIR_ROLES_PER_COMPANY = 4;
-const DEFAULT_MAX_JOBS = 1000;
+const FAIR_ROLES_PER_COMPANY = 3;
+const DEFAULT_MAX_JOBS = 500;
 
 export interface JobscallCollectionItem {
   id: string;

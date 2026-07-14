@@ -9,7 +9,8 @@ import { matchJobsWithCv } from "@/lib/cv-match";
 import type { CvFeatures } from "@/lib/cv-extract";
 import { demoYouth } from "@/lib/storage";
 import type { JobAiStrip } from "@/lib/job-ai-types";
-import type { MatchResult } from "@/lib/types";
+import type { MatchEvidence, MatchResult } from "@/lib/types";
+import { saveMatchRun } from "@/lib/repositories/seeker-repository";
 import { applyLocalHireAndSalaryToMatchResults } from "@/lib/match-rank-signals";
 import { lookupEmployerWorkforce } from "@/lib/employer-transparency";
 import {
@@ -22,7 +23,8 @@ import {
 } from "lucide-react";
 import clsx from "clsx";
 
-const DEFAULT_LLM_DEPTH = 30;
+/** Fewer jobs → one Grok call → much faster Smart Match */
+const DEFAULT_LLM_DEPTH = 8;
 
 interface LlmScoreRow {
   jobId: string;
@@ -40,6 +42,7 @@ interface DisplayMatchRow {
   score: number;
   reasons: string[];
   reasonsZh: string[];
+  evidence?: MatchEvidence;
   llm?: LlmScoreRow;
 }
 
@@ -69,6 +72,8 @@ export default function MatchPage() {
   const [llmOrder, setLlmOrder] = useState<string[] | null>(null);
   const [maxJobs, setMaxJobs] = useState(DEFAULT_LLM_DEPTH);
   const [xaiReady, setXaiReady] = useState<boolean | null>(null);
+  const [minimumScore, setMinimumScore] = useState(0);
+  const [hideBlocked, setHideBlocked] = useState(true);
 
   const cvFeatures = (youth?.cv?.features as CvFeatures | undefined) || null;
 
@@ -117,6 +122,7 @@ export default function MatchPage() {
               ? row.reasonsZh
               : row.reasons,
           reasonsZh: llm?.reasons?.length ? llm.reasons : row.reasonsZh,
+          evidence: row.evidence,
           llm,
         });
       }
@@ -128,6 +134,7 @@ export default function MatchPage() {
           score: r.score,
           reasons: lang === "zh" ? r.reasonsZh : r.reasons,
           reasonsZh: r.reasonsZh,
+          evidence: r.evidence,
         });
       }
       return ordered;
@@ -138,10 +145,20 @@ export default function MatchPage() {
       score: r.score,
       reasons: lang === "zh" ? r.reasonsZh : r.reasons,
       reasonsZh: r.reasonsZh,
+      evidence: r.evidence,
     }));
   }, [ruleResults, llmOrder, llmByJobId, lang]);
 
-  const top = displayResults[0];
+  const visibleResults = useMemo(
+    () =>
+      displayResults.filter(
+        (row) =>
+          row.score >= minimumScore &&
+          (!hideBlocked || !(row.evidence?.constraints || []).some((item) => /credential|age|18\\+|ceiling: 1[0-9]/i.test(item)))
+      ),
+    [displayResults, minimumScore, hideBlocked]
+  );
+  const top = visibleResults[0];
 
   useEffect(() => {
     let cancelled = false;
@@ -244,18 +261,35 @@ export default function MatchPage() {
     try {
       if (!preferLlm || xaiReady === false) {
         setScoringMode("rules");
+        setLlmOrder(baseline.map((r) => r.job.id));
+        setLlmByJobId({});
         setAiOverview(
           zh
-            ? "使用規則配對：專業適合度 + 本地招聘可能性（「低」上限約 48 分）+ 預期薪酬。設定 XAI_API_KEY 後可用 Grok 語義打分（仍套用本地招聘護欄）。"
-            : "Using rules: profession fit + local hiring (Low capped ~48) + expected salary. Set XAI_API_KEY for Grok under the same local-hire guardrails."
+            ? "使用規則配對：專業適合度 + 本地招聘可能性（「低」上限約 48 分）+ 預期薪酬。"
+            : "Using rules: profession fit + local hiring (Low capped ~48) + expected salary."
         );
+        void saveMatchRun({
+          algorithmVersion: "rules-2026.07",
+          provenance: { cv: Boolean(cvFeatures), sources: ["dsal", "jobscall", "hellojobs"] },
+          preferences: { minimumScore, hideBlocked },
+          results: baseline.slice(0, 20).map((row) => ({ jobId: row.job.id, score: row.score })),
+        });
         return;
       }
 
-      // Shortlist already demotes Low local-hire — send top pool to LLM
-      const shortlist = baseline
-        .slice(0, Math.max(maxJobs, 40))
-        .map((r) => r.job);
+      // Paint rule results immediately so UI feels instant; Grok upgrades in place
+      setScoringMode("rules");
+      setLlmOrder(baseline.map((r) => r.job.id));
+      setLlmByJobId({});
+      setAiOverview(
+        zh
+          ? "規則結果已就緒，Grok 語義精排進行中…"
+          : "Rule results ready — Grok semantic re-rank in progress…"
+      );
+      // Stop the full-page spinner so users can browse while Grok runs
+      setMatchLoading(false);
+
+      const shortlist = baseline.slice(0, maxJobs).map((r) => r.job);
       const res = await fetch("/api/ai/job-match", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -265,7 +299,8 @@ export default function MatchPage() {
           lang,
           maxJobs,
           cv: cvFeatures,
-          officialJobs: officialJobs.slice(0, 120),
+          officialJobs: officialJobs.slice(0, 80),
+          consent: true,
         }),
       });
       const data = await res.json();
@@ -277,24 +312,44 @@ export default function MatchPage() {
       const map: Record<string, LlmScoreRow> = {};
       for (const s of scores) map[s.jobId] = s;
       setLlmByJobId(map);
-      setLlmOrder(scores.map((s) => s.jobId));
+      if (scores.length) setLlmOrder(scores.map((s) => s.jobId));
       setAiOverview(data.overview || null);
-      setScoringMode(data.provider === "xai" ? "llm" : "rules");
+      const usedGrok =
+        data.provider === "xai" || data.meta?.usedGrok === true;
+      setScoringMode(usedGrok ? "llm" : "rules");
       setLlmModel(data.model || null);
       setXaiReady(!!data.meta?.xaiConfigured);
-      persistStrips(scores);
-
-      // If LLM returned empty, keep rule results visible
-      if (scores.length === 0 && baseline.length > 0) {
-        setScoringMode("rules");
+      if (!usedGrok && data.meta?.xaiConfigured) {
+        setAiError(
+          zh
+            ? "金鑰已設定，但本次未使用 Grok（可能回退規則）。"
+            : "API key is set but this run did not use Grok (fell back to rules)."
+        );
+      } else {
+        setAiError(null);
       }
+      persistStrips(scores);
+      void saveMatchRun({
+        algorithmVersion: usedGrok ? `grok+rules-2026.07` : "rules-2026.07",
+        provenance: {
+          cv: Boolean(cvFeatures),
+          sources: ["dsal", "jobscall", "hellojobs"],
+          usedGrok,
+        },
+        preferences: { maxJobs, minimumScore, hideBlocked },
+        results: scores.map((score) => ({
+          jobId: score.jobId,
+          score: score.fitScore,
+        })),
+      });
     } catch (e) {
-      setAiError(e instanceof Error ? e.message : "Match failed");
+      const msg = e instanceof Error ? e.message : "Match failed";
+      setAiError(msg);
       setScoringMode("rules");
       setAiOverview(
         zh
-          ? "AI 配對失敗，已顯示規則配對結果。"
-          : "AI matching failed — showing rule-based results."
+          ? `AI 精排失敗（${msg}），保留規則配對結果。`
+          : `AI re-rank failed (${msg}) — keeping rule-based results.`
       );
     } finally {
       setMatchLoading(false);
@@ -337,9 +392,14 @@ export default function MatchPage() {
             ? " · 尚未上傳履歷（仍可用檔案配對）"
             : " · no CV yet (profile-only match still works)"}
         {xaiReady === true &&
-          (zh ? " · Grok 已就緒" : " · Grok ready")}
+          (zh ? " · Grok API 已設定" : " · Grok API configured")}
         {xaiReady === false &&
           (zh ? " · 未設定 XAI_API_KEY" : " · XAI_API_KEY not set")}
+        {scoringMode === "llm" &&
+          (zh ? " · 本次：Grok 語義打分" : " · this run: Grok semantic scores")}
+        {scoringMode === "rules" &&
+          ran &&
+          (zh ? " · 本次：規則引擎" : " · this run: rules engine")}
       </p>
 
       <div className="mt-6">
@@ -413,12 +473,23 @@ export default function MatchPage() {
             onChange={(e) => setMaxJobs(Number(e.target.value))}
             className="rounded-lg border border-macau-navy/15 bg-white px-2 py-1.5 text-sm font-medium text-macau-navy"
           >
-            {[15, 20, 30, 40].map((n) => (
+            {[6, 8, 12, 16].map((n) => (
               <option key={n} value={n}>
                 {n}
+                {n <= 8 ? (zh ? "（快）" : " (fast)") : n >= 16 ? (zh ? "（較慢）" : " (slower)") : ""}
               </option>
             ))}
           </select>
+        </label>
+        <label className="flex items-center gap-1.5 text-xs text-macau-navy/60">
+          {zh ? "最低分" : "Minimum score"}
+          <select value={minimumScore} onChange={(e) => setMinimumScore(Number(e.target.value))} className="rounded-lg border px-2 py-1.5">
+            {[0, 40, 60, 75].map((score) => <option key={score} value={score}>{score}+</option>)}
+          </select>
+        </label>
+        <label className="flex items-center gap-2 text-xs text-macau-navy/60">
+          <input type="checkbox" checked={hideBlocked} onChange={(e) => setHideBlocked(e.target.checked)} />
+          {zh ? "隱藏資格明顯不符" : "Hide eligibility conflicts"}
         </label>
 
         <button
@@ -540,16 +611,21 @@ export default function MatchPage() {
         </div>
       )}
 
-      {ran && displayResults.length > 0 && (
+      {ran && visibleResults.length > 0 && (
         <div className="mt-8 grid gap-4">
-          {displayResults.slice(0, 40).map((r) => (
-            <JobCard
-              key={r.job.id}
-              job={r.job}
-              matchScore={r.score}
-              reasons={r.reasons}
-              aiStrip={toStrip(r)}
-            />
+          {visibleResults.slice(0, 40).map((r) => (
+            <div key={r.job.id}>
+              <JobCard job={r.job} matchScore={r.score} reasons={r.reasons} aiStrip={toStrip(r)} />
+              {r.evidence && (
+                <div className="mx-3 -mt-2 rounded-b-2xl border border-t-0 bg-white px-4 py-3 text-xs text-macau-navy/65">
+                  <strong>{zh ? "下一步：" : "Next step: "}</strong>
+                  {r.evidence.nextSteps[0]}
+                  <span className="ml-2 text-macau-navy/40">
+                    {zh ? "資料信心" : "Data confidence"}: {r.evidence.confidence}
+                  </span>
+                </div>
+              )}
+            </div>
           ))}
         </div>
       )}

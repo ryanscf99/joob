@@ -198,3 +198,34 @@ On Vercel: **Project → Settings → Environment Variables** → add `XAI_API_K
 - Complements DSAL / DSEDJ services; **not** an official government portal.  
 - Open-data series are labelled benchmarks / samples, not live feeds unless noted.  
 - Research pilot under **Macau Job Problem**.
+
+---
+
+## Production accounts and data
+
+jOOB supports two modes:
+
+- **Local demo:** no Supabase variables; profile, saves, and applications remain on the device.
+- **Production:** Supabase Auth + Postgres; each seeker can access only their own rows through row-level security.
+
+To enable production mode:
+
+1. Create a Supabase project.
+2. Run `supabase/migrations/202607140001_job_seeker_foundation.sql`.
+3. Copy `.env.example` to `.env.local` and set `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
+4. Add `http://localhost:3000/auth/callback` and the deployed callback URL to Supabase Auth redirect URLs.
+
+CV parsing stores only structured features in the seeker profile by default. The original upload and full extracted text are not persisted. Signed-in users can export or delete seeker data from the Profile page.
+
+## Quality checks
+
+```bash
+npm run lint
+npm run typecheck
+npm test
+npm run test:cv
+npm run test:e2e
+npm run build
+```
+
+The deterministic rules engine remains available without `XAI_API_KEY`; AI reranking is supplementary and shows its contribution separately.

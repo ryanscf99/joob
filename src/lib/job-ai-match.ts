@@ -1,7 +1,6 @@
 /**
- * LLM-first job ↔ seeker matching.
- * Uses xAI Grok to score fit from full job description vs profile/CV,
- * with rule-based shortlisting for scale and credential/profession guardrails.
+ * LLM-first job ↔ seeker matching (speed-tuned).
+ * One compact Grok call over a short shortlist + local guardrails.
  */
 
 import type { JobPosting, Lang, YouthProfile } from "./types";
@@ -11,22 +10,23 @@ import type { EmployerWorkforce } from "./employer-transparency";
 import type { SectorWageBenchmark } from "./wage-benchmark";
 import { matchJobsWithCv } from "./cv-match";
 import { assessProfessionFit } from "./profession-fit";
-import { createXaiClient, isXaiConfigured, XAI_MODEL } from "./xai";
+import {
+  createXaiClient,
+  isXaiConfigured,
+  XAI_MATCH_MODEL,
+} from "./xai";
 import {
   applyLocalHireAndSalaryToMatchResults,
   computeJobRankSignals,
   finalizeMatchScore,
-  signalsForLlm,
   type JobRankSignals,
 } from "./match-rank-signals";
 import { lookupEmployerWorkforce } from "./employer-transparency";
 
 export interface LlmMatchScore {
   jobId: string;
-  /** Primary credible score (LLM when available) */
   fitScore: number;
   verdict: AiVerdict;
-  /** Short explainable reasons (from LLM or rules) */
   reasons: string[];
   blurb: string;
   ruleMatchScore?: number;
@@ -40,28 +40,41 @@ export interface LlmMatchResult {
   provider: "xai" | "heuristic";
   model?: string;
   generatedAt: string;
-  /** How many jobs were LLM-scored */
   scoredCount: number;
-  /** Pool size before shortlist */
   poolSize: number;
+  /** Wall time for debugging / UI */
+  durationMs?: number;
 }
 
 export interface LlmMatchInput {
   youth: YouthProfile;
   jobs: JobPosting[];
   lang: Lang;
-  /** Max jobs to send to the LLM (default 30) */
+  /** Max jobs to send to the LLM (default 12, hard cap 20) */
   maxJobs?: number;
   cv?: CvFeatures | null;
-  /** jobId → workforce (local vs NRW) for local-hire ranking */
   workforceByJobId?: Record<string, EmployerWorkforce | null | undefined>;
-  /** Sector pay benchmarks for expected-salary propose */
   benchmarks?: Record<string, SectorWageBenchmark> | null;
 }
 
-const BATCH_SIZE = 12;
+/** Prefer a single API call — larger batches are slower and more failure-prone */
+const LLM_BATCH_SIZE = 16;
+/** Default shortlist size — one Grok call, good latency/quality tradeoff */
+const DEFAULT_MAX_LLM_JOBS = 8;
+const HARD_MAX_LLM_JOBS = 16;
 
-function cvFromYouth(youth: YouthProfile, cv?: CvFeatures | null): CvFeatures | null {
+/** Short-lived server cache: same youth + shortlist → reuse scores */
+const matchCache = new Map<
+  string,
+  { at: number; result: LlmMatchResult }
+>();
+const MATCH_CACHE_TTL_MS = 8 * 60 * 1000;
+const MATCH_CACHE_MAX = 40;
+
+function cvFromYouth(
+  youth: YouthProfile,
+  cv?: CvFeatures | null
+): CvFeatures | null {
   if (cv && cv.textLength >= 40) return cv;
   if (!youth.cv?.features) return null;
   const f = youth.cv.features;
@@ -93,67 +106,64 @@ function seekerPayload(youth: YouthProfile, cv: CvFeatures | null) {
     name: youth.name,
     age: youth.age,
     isStudent: youth.isStudent,
-    languages: youth.languages,
-    skills: youth.skills,
+    languages: (youth.languages || []).slice(0, 6),
+    skills: (youth.skills || []).slice(0, 12),
     preferredLanes: youth.preferredLanes,
     preferredSectors: youth.preferredSectors,
     district: youth.district,
-    availability: youth.availability,
-    bio: (youth.bio || "").slice(0, 500),
-    hasCv: !!cv,
     educationLevel: cv?.educationLevel || youth.cv?.features?.educationLevel,
-    educationHints: (cv?.educationHints || []).slice(0, 10),
     careerStage: cv?.careerStage,
     experienceYears: cv?.experienceYears,
-    cvSkills: (cv?.skills || []).slice(0, 25),
-    cvKeywords: (cv?.keywords || []).slice(0, 30),
-    cvSummary: (cv?.summary || "").slice(0, 600),
-    researchInterests: (cv?.researchInterests || "").slice(0, 300),
+    cvSkills: (cv?.skills || []).slice(0, 12),
+    cvKeywords: (cv?.keywords || []).slice(0, 12),
+    cvSummary: (cv?.summary || youth.bio || "").slice(0, 280),
   };
 }
 
+/** Compact job card for LLM — small tokens, still enough for fit. */
 function jobPayload(
   job: JobPosting,
   ruleScore: number,
   youth: YouthProfile,
   cv: CvFeatures | null,
-  rankSignals?: JobRankSignals | null
+  rankSignals: JobRankSignals | null | undefined,
+  lang: Lang
 ) {
   const prof = assessProfessionFit(youth, job, cv);
+  const desc =
+    lang === "zh"
+      ? (job.descriptionZh || job.description || "").slice(0, 280)
+      : (job.description || job.descriptionZh || "").slice(0, 280);
   return {
     id: job.id,
-    title: job.title,
-    titleZh: job.titleZh,
-    company: job.company,
-    companyZh: job.companyZh,
+    title: lang === "zh" ? job.titleZh || job.title : job.title,
+    company: lang === "zh" ? job.companyZh || job.company : job.company,
     sector: job.sector,
     lane: job.lane,
-    district: job.district,
-    payMin: job.payMin,
-    payMax: job.payMax,
-    payUnit: job.payUnit,
-    languages: job.languages,
-    skills: (job.skills || []).slice(0, 12),
-    requirements: (job.requirements || []).slice(0, 10),
-    requirementsZh: (job.requirementsZh || []).slice(0, 8),
-    /** Full-ish job description for semantic matching */
-    description: (job.description || "").slice(0, 900),
-    descriptionZh: (job.descriptionZh || "").slice(0, 900),
-    youthFriendly: job.youthFriendly,
-    trainingProvided: job.trainingProvided,
-    source: job.source,
-    ruleMatchScore: ruleScore,
-    profession: {
-      seekerDomains: prof.seekerDomains,
-      jobDomains: prof.jobDomains,
-      hardMismatch: prof.hardMismatch,
-      credentialBlock: prof.credentialBlock,
-      requiredCredentials: prof.credentials?.required || [],
-      missingCredentials: prof.credentials?.missing || [],
-      matchedCredentials: prof.credentials?.matched || [],
+    pay:
+      job.payMin || job.payMax
+        ? `${job.payMin || "?"}-${job.payMax || "?"} ${job.payUnit}`
+        : null,
+    skills: (job.skills || []).slice(0, 6),
+    req: (job.requirements || []).slice(0, 4),
+    desc,
+    src: job.source,
+    rule: ruleScore,
+    prof: {
+      hard: prof.hardMismatch,
+      cred: prof.credentialBlock,
+      miss: (prof.credentials?.missing || []).slice(0, 3),
+      domains: (prof.jobDomains || []).slice(0, 4),
     },
-    /** Prefer higher local-hire likelihood and higher expected propose salary */
-    rankSignals: rankSignals ? signalsForLlm(rankSignals) : null,
+    local: rankSignals
+      ? {
+          level: rankSignals.localHireLevel,
+          steps: rankSignals.localHireSteps,
+          raw: rankSignals.localHireRaw,
+          payDev: rankSignals.payDeviationPct,
+          propose: rankSignals.expectedProposeMonthly,
+        }
+      : null,
   };
 }
 
@@ -170,7 +180,8 @@ function buildPoolSignals(
         job,
         youth,
         input.benchmarks,
-        input.workforceByJobId?.[job.id]
+        input.workforceByJobId?.[job.id],
+        { fast: true }
       )
     );
   }
@@ -185,7 +196,9 @@ function applyLocalHireSalaryBlend(
   signalMap: Map<string, JobRankSignals>
 ): LlmMatchScore[] {
   const pool = shortlist.map(
-    (r) => signalMap.get(r.job.id) || computeJobRankSignals(r.job, youth, null)
+    (r) =>
+      signalMap.get(r.job.id) ||
+      computeJobRankSignals(r.job, youth, null, null, { fast: true })
   );
   const byId = new Map(shortlist.map((r) => [r.job.id, r.job]));
 
@@ -195,9 +208,11 @@ function applyLocalHireSalaryBlend(
     if (!job || !sig) return s;
     const fin = finalizeMatchScore(s.fitScore, job, sig, pool, youth, cv);
     const reasons = [...s.reasons];
-    if (fin.reasonEn && !reasons.some((r) => r.includes("Local hiring") || r.includes("本地招聘"))) {
+    if (
+      fin.reasonEn &&
+      !reasons.some((r) => r.includes("Local hiring") || r.includes("本地招聘"))
+    ) {
       reasons.unshift(
-        // Prefer language already in reasons list style
         reasons.some((r) => /[\u4e00-\u9fff]/.test(r))
           ? fin.reasonZh || fin.reasonEn
           : fin.reasonEn
@@ -223,7 +238,15 @@ function applyGuardrails(
   if (prof.credentialBlock) {
     score = Math.min(score, 18);
     v = "not_recommended";
-    if (prof.reasonsEn[0] && !rs.some((r) => r.includes("credential") || r.includes("licence") || r.includes("資格"))) {
+    if (
+      prof.reasonsEn[0] &&
+      !rs.some(
+        (r) =>
+          r.includes("credential") ||
+          r.includes("licence") ||
+          r.includes("資格")
+      )
+    ) {
       rs.unshift(prof.reasonsEn[0]);
     }
   } else if (prof.hardMismatch) {
@@ -247,10 +270,46 @@ function verdictFromScore(score: number): AiVerdict {
   return "not_recommended";
 }
 
-/** Heuristic fallback: use rule scores as primary, then local-hire + salary hard caps. */
+function cacheKey(input: LlmMatchInput, shortlistIds: string[]): string {
+  const y = input.youth;
+  const cvBits = [
+    y.id,
+    y.age,
+    (y.skills || []).slice(0, 8).join(","),
+    (y.preferredSectors || []).join(","),
+    (input.cv?.skills || []).slice(0, 8).join(","),
+    (input.cv?.summary || "").slice(0, 40),
+    input.lang,
+  ].join("|");
+  return `${cvBits}::${shortlistIds.join(",")}`;
+}
+
+function getCached(key: string): LlmMatchResult | null {
+  const hit = matchCache.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.at > MATCH_CACHE_TTL_MS) {
+    matchCache.delete(key);
+    return null;
+  }
+  return { ...hit.result, generatedAt: new Date().toISOString() };
+}
+
+function setCache(key: string, result: LlmMatchResult) {
+  if (matchCache.size >= MATCH_CACHE_MAX) {
+    const oldest = [...matchCache.entries()].sort((a, b) => a[1].at - b[1].at)[0];
+    if (oldest) matchCache.delete(oldest[0]);
+  }
+  matchCache.set(key, { at: Date.now(), result });
+}
+
+/** Heuristic fallback */
 export function buildHeuristicLlmMatch(input: LlmMatchInput): LlmMatchResult {
+  const t0 = Date.now();
   const cv = cvFromYouth(input.youth, input.cv);
-  const maxJobs = Math.min(50, Math.max(8, input.maxJobs ?? 30));
+  const maxJobs = Math.min(
+    HARD_MAX_LLM_JOBS,
+    Math.max(6, input.maxJobs ?? DEFAULT_MAX_LLM_JOBS)
+  );
 
   const adjusted = applyLocalHireAndSalaryToMatchResults(
     matchJobsWithCv(input.youth, input.jobs, cv),
@@ -284,12 +343,13 @@ export function buildHeuristicLlmMatch(input: LlmMatchInput): LlmMatchResult {
     scores,
     overview:
       input.lang === "zh"
-        ? "規則配對已強制：本地招聘可能性「低」的職位配對分上限約 48，不會再以 100 分排第一。同時加權可提出預期薪酬。設定 XAI_API_KEY 後改用 Grok，但仍保留此護欄。"
-        : "Rules enforce: Low local-hiring roles are capped (~48) and cannot rank #1 with a perfect score. Expected proposed salary is also weighted. With XAI_API_KEY, Grok scores semantics under the same guardrails.",
+        ? "規則配對（未呼叫 Grok 或已回退）。本地招聘「低」有分數上限。"
+        : "Rule ranking (Grok not used or unavailable). Low local-hire scores are capped.",
     provider: "heuristic",
     generatedAt: new Date().toISOString(),
     scoredCount: scores.length,
     poolSize: input.jobs.length,
+    durationMs: Date.now() - t0,
   };
 }
 
@@ -310,65 +370,31 @@ async function llmScoreBatch(
 > {
   const langLine =
     lang === "zh"
-      ? "Write all reasons and blurbs in Traditional Chinese (繁體中文)."
-      : "Write all reasons and blurbs in clear English.";
+      ? "reasons/blurb in Traditional Chinese."
+      : "reasons/blurb in English.";
 
+  // Compact system prompt = fewer tokens & faster time-to-first-token
   const completion = await client.chat.completions.create({
-    model: XAI_MODEL,
-    temperature: 0.2,
-    max_tokens: 2800,
+    model: XAI_MATCH_MODEL,
+    temperature: 0,
+    max_tokens: Math.min(1400, 120 + jobs.length * 90),
     response_format: { type: "json_object" },
     messages: [
       {
         role: "system",
-        content: `You are jOOB's Macau job-matching engine. Score how well EACH job fits THIS seeker by comparing:
-1) Job title, full description, requirements, skills
-2) Seeker profile, CV summary, skills, education, experience, preferred sectors/lanes
-
-${langLine}
-
-Scoring principles (credible fit, not keyword spam):
-- PRIMARY: profession, field of study, skills required vs skills held, and regulated credentials.
-- If profession.credentialBlock or missingCredentials: fitScore ≤ 18, verdict not_recommended. Licences cannot be inferred from soft keywords.
-- If profession.hardMismatch (e.g. Statistics PhD vs Tea Master): fitScore ≤ 28, verdict weak_fit or not_recommended.
-- Do NOT give high scores just because both mention "teamwork" or "Macau".
-- Strong fits need clear overlap in occupation, hard skills, education field, or career path.
-
-PRIORITY BOOSTS (among roles that pass profession fit — these MUST move the ranking):
-1) LOCAL HIRING: Prefer higher rankSignals.localHiringLikelihood. HARD CAPS:
-   - level "low" / steps1to4 ≤ 1 → fitScore MUST be ≤ maxFitScoreIfLow (48). NEVER give 80–100.
-   - level "mixed" → fitScore MUST be ≤ maxFitScoreIfMixed (68).
-   - Roles with Low local-hire MUST rank below High/Fair local-hire when profession fit is similar.
-2) EXPECTED SALARY: Prefer higher rankSignals.expectedSalary.proposeTargetMonthlyMop. Negative payDeviationPct should lower the score.
-- Among two similar profession fits, better local-hire + higher expected propose salary MUST score higher.
-- ruleMatchScore is a weak prior only.
-- fitScore 0–100 integer. verdict: strong_fit | possible | weak_fit | not_recommended
-- reasons: 2–3 short bullets — mention local-hire when Low/capped.
-- blurb: max 140 chars.
-
-Output ONLY valid JSON.`,
+        content: `Macau youth job scorer. Score EACH job vs seeker. ${langLine}
+Rules: profession/credentials first. prof.cred or miss→fit≤18 not_recommended. prof.hard→fit≤28.
+Local hire: local.level low→fit≤48; mixed→fit≤68. Prefer higher local.steps & propose when profession fits.
+No keyword spam. JSON only:
+{"scores":[{"jobId":"","fitScore":0,"verdict":"strong_fit|possible|weak_fit|not_recommended","reasons":["…"],"blurb":"≤100 chars"}]}
+Include every jobId once.`,
       },
       {
         role: "user",
-        content: `SEEKER PROFILE:
-${JSON.stringify(seekerPayload(youth, cv))}
-
-JOBS TO SCORE (${jobs.length}) — each has rankSignals for local hiring + expected salary:
-${JSON.stringify(jobs)}
-
-Return JSON:
-{
-  "scores": [
-    {
-      "jobId": "exact id",
-      "fitScore": 0,
-      "verdict": "strong_fit|possible|weak_fit|not_recommended",
-      "reasons": ["...", "..."],
-      "blurb": "..."
-    }
-  ]
-}
-Include every jobId exactly once. Rank order implied by fitScore: profession first, then higher local hiring likelihood, then higher expected propose salary.`,
+        content: JSON.stringify({
+          seeker: seekerPayload(youth, cv),
+          jobs,
+        }),
       },
     ],
   });
@@ -393,18 +419,19 @@ Include every jobId exactly once. Rank order implied by fitScore: profession fir
     fitScore: Number(s.fitScore) || 0,
     verdict: String(s.verdict || "possible"),
     reasons: Array.isArray(s.reasons)
-      ? s.reasons.map(String).filter(Boolean).slice(0, 4)
+      ? s.reasons.map(String).filter(Boolean).slice(0, 3)
       : [],
-    blurb: String(s.blurb || "").slice(0, 200),
+    blurb: String(s.blurb || "").slice(0, 140),
   }));
 }
 
 /**
- * Primary entry: LLM match scores for shortlisted jobs.
+ * Primary entry: LLM match scores for shortlisted jobs (fast path).
  */
 export async function generateLlmMatchScores(
   input: LlmMatchInput
 ): Promise<LlmMatchResult> {
+  const t0 = Date.now();
   if (!isXaiConfigured()) {
     return buildHeuristicLlmMatch(input);
   }
@@ -413,11 +440,18 @@ export async function generateLlmMatchScores(
   if (!client) return buildHeuristicLlmMatch(input);
 
   const cv = cvFromYouth(input.youth, input.cv);
-  const maxJobs = Math.min(40, Math.max(8, input.maxJobs ?? 30));
+  const maxJobs = Math.min(
+    HARD_MAX_LLM_JOBS,
+    Math.max(6, input.maxJobs ?? DEFAULT_MAX_LLM_JOBS)
+  );
 
-  // Shortlist with local-hire / pay caps so Low local-hire doesn't dominate the pool
+  // Rule rank only a pre-trimmed pool (full 1000-job scan + signals was slow)
+  const rulePool = matchJobsWithCv(input.youth, input.jobs, cv).slice(
+    0,
+    Math.min(input.jobs.length, maxJobs * 3 + 12)
+  );
   const allRule = applyLocalHireAndSalaryToMatchResults(
-    matchJobsWithCv(input.youth, input.jobs, cv),
+    rulePool,
     input.youth,
     input.benchmarks,
     (job) =>
@@ -425,19 +459,24 @@ export async function generateLlmMatchScores(
       lookupEmployerWorkforce(`${job.company} ${job.companyZh}`, job.sector),
     cv
   );
-  const shortlist = allRule.slice(0, maxJobs);
-  const byId = new Map(shortlist.map((r) => [r.job.id, r]));
+
+  // Split: blocked jobs skip LLM (saves tokens & time)
+  const candidates = allRule.filter((r) => {
+    const p = assessProfessionFit(input.youth, r.job, cv);
+    return !p.credentialBlock && !p.hardMismatch;
+  });
+  const blocked = allRule.filter((r) => {
+    const p = assessProfessionFit(input.youth, r.job, cv);
+    return p.credentialBlock || p.hardMismatch;
+  });
+
+  const shortlist = candidates.slice(0, maxJobs);
+  const byId = new Map(allRule.map((r) => [r.job.id, r]));
 
   if (shortlist.length === 0) {
-    return {
-      scores: [],
-      overview:
-        input.lang === "zh" ? "沒有可配對職位。" : "No jobs to match.",
-      provider: "xai",
-      generatedAt: new Date().toISOString(),
-      scoredCount: 0,
-      poolSize: input.jobs.length,
-    };
+    // Only blocked / empty pool — return heuristic top
+    const fb = buildHeuristicLlmMatch(input);
+    return { ...fb, durationMs: Date.now() - t0 };
   }
 
   const signalMap = buildPoolSignals(
@@ -446,13 +485,28 @@ export async function generateLlmMatchScores(
     input
   );
 
+  const key = cacheKey(
+    input,
+    shortlist.map((r) => r.job.id)
+  );
+  const cached = getCached(key);
+  if (cached) {
+    return {
+      ...cached,
+      overview:
+        (input.lang === "zh" ? "（快取）" : "(cached) ") + cached.overview,
+      durationMs: Date.now() - t0,
+    };
+  }
+
   const payloads = shortlist.map((r) =>
     jobPayload(
       r.job,
       r.score,
       input.youth,
       cv,
-      signalMap.get(r.job.id) || null
+      signalMap.get(r.job.id),
+      input.lang
     )
   );
 
@@ -465,29 +519,30 @@ export async function generateLlmMatchScores(
   }[] = [];
 
   try {
-    // Batch to stay within context / output limits
-    for (let i = 0; i < payloads.length; i += BATCH_SIZE) {
-      const chunk = payloads.slice(i, i + BATCH_SIZE);
-      const rows = await llmScoreBatch(
-        client,
-        input.youth,
-        cv,
-        chunk,
-        input.lang
-      );
-      llmRows.push(...rows);
+    // Prefer ONE call. Only split if above batch size (rare with max 16–20).
+    const chunks: (typeof payloads)[] = [];
+    for (let i = 0; i < payloads.length; i += LLM_BATCH_SIZE) {
+      chunks.push(payloads.slice(i, i + LLM_BATCH_SIZE));
     }
+    // Parallel max 2 chunks if ever split
+    const results = await Promise.all(
+      chunks.map((chunk) =>
+        llmScoreBatch(client, input.youth, cv, chunk, input.lang)
+      )
+    );
+    for (const rows of results) llmRows.push(...rows);
   } catch (err) {
-    // Fall back entirely to rules if LLM fails mid-way with no results
+    const msg = err instanceof Error ? err.message : "LLM error";
+    console.error("[job-ai-match] Grok batch failed:", msg);
     if (llmRows.length === 0) {
       const fb = buildHeuristicLlmMatch(input);
-      const msg = err instanceof Error ? err.message : "LLM error";
       return {
         ...fb,
         overview:
           input.lang === "zh"
-            ? `AI 配對暫時失敗（${msg}），已回退規則分數（含本地招聘／預期薪酬優先）。`
-            : `AI matching failed (${msg}); showing rule scores (local-hire + expected salary priority).`,
+            ? `Grok 呼叫失敗（${msg}），已回退規則分數。`
+            : `Grok call failed (${msg}); showing rule scores.`,
+        durationMs: Date.now() - t0,
       };
     }
   }
@@ -505,7 +560,7 @@ export async function generateLlmMatchScores(
     if (!row.jobId || seen.has(row.jobId) || !byId.has(row.jobId)) continue;
     seen.add(row.jobId);
     const match = byId.get(row.jobId)!;
-    let verdict = (
+    const verdict = (
       allowed.includes(row.verdict as AiVerdict)
         ? row.verdict
         : verdictFromScore(row.fitScore)
@@ -539,9 +594,10 @@ export async function generateLlmMatchScores(
     });
   }
 
-  // Any shortlist job missing from LLM response → rule fallback for that item
-  for (const r of shortlist) {
+  // Missing from LLM + blocked professions → rule scores
+  for (const r of [...shortlist, ...blocked.slice(0, 8)]) {
     if (seen.has(r.job.id)) continue;
+    seen.add(r.job.id);
     const prof = assessProfessionFit(input.youth, r.job, cv);
     let fitScore = r.score;
     if (prof.credentialBlock) fitScore = Math.min(fitScore, 18);
@@ -561,7 +617,6 @@ export async function generateLlmMatchScores(
     });
   }
 
-  // Deterministic re-blend: local hiring + expected salary among profession-safe fits
   scores = applyLocalHireSalaryBlend(
     scores,
     shortlist,
@@ -573,25 +628,28 @@ export async function generateLlmMatchScores(
   scores.sort((a, b) => b.fitScore - a.fitScore);
   scores.forEach((s, i) => {
     s.rank = i + 1;
-    // Keep hard not_recommended from guardrails; refresh others from blended score
     if (s.verdict !== "not_recommended") {
       s.verdict = verdictFromScore(s.fitScore);
     }
   });
 
   const strong = scores.filter((s) => s.fitScore >= 70).length;
+  const ms = Date.now() - t0;
   const overview =
     input.lang === "zh"
-      ? `已用 Grok 對 ${scores.length} 個職位（從 ${input.jobs.length} 個公開空缺中預篩）打分：專業適合度優先，其次本地招聘可能性與可提出的預期薪酬。其中 ${strong} 個適合度 ≥ 70。`
-      : `Grok scored ${scores.length} roles (shortlisted from ${input.jobs.length} public vacancies): profession fit first, then local hiring likelihood and higher expected proposed salary. ${strong} scored ≥ 70.`;
+      ? `Grok（${XAI_MATCH_MODEL}）已對 ${shortlist.length} 個職位打分（預篩自 ${input.jobs.length}），約 ${Math.round(ms / 100) / 10}s。其中 ${strong} 個 ≥ 70。`
+      : `Grok (${XAI_MATCH_MODEL}) scored ${shortlist.length} roles (from ${input.jobs.length}) in ~${Math.round(ms / 100) / 10}s. ${strong} scored ≥ 70.`;
 
-  return {
+  const result: LlmMatchResult = {
     scores,
     overview,
     provider: "xai",
-    model: XAI_MODEL,
+    model: XAI_MATCH_MODEL,
     generatedAt: new Date().toISOString(),
     scoredCount: scores.length,
     poolSize: input.jobs.length,
+    durationMs: ms,
   };
+  setCache(key, result);
+  return result;
 }
